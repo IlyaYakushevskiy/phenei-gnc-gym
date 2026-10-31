@@ -47,6 +47,10 @@ class Descent6DOFConfig:
     k_vz: float = None                       # SIM-GD08 (6-DOF gain, lower than 3-DOF)
     initial_downrange: float = 0.0           # m; start upstream so touchdown lands on the
                                              # landing site at the frame origin
+    range_brake: float = 0.85                # fraction of available horizontal decel used by
+                                             # the range-to-go profile
+    guidance_mode: str = "profile"           # "profile" | "range" | "zemzev" (targets
+                                             # the landing SITE, TR-SIM-11)
 
     def __post_init__(self):
         if self.ignition_altitude is None:
@@ -110,6 +114,7 @@ class Descent6DOF:
         self.v_touchdown = PARAMS.value("SIM-GD04")
         self.k_vz = self.cfg.k_vz
         self.k_vx = PARAMS.value("SIM-GD03")
+        self.k_vx_range = 0.6
         st = min_energy_arc().state_at_altitude(self.cfg.ignition_altitude)
         self.a_dec = st["v_vertical"] ** 2 / (2.0 * self.cfg.ignition_altitude)
         self._ic = st
@@ -161,6 +166,46 @@ class Descent6DOF:
         if alt <= self.h_terminal:
             frac = self.cfg.n_engines_terminal / 4.0
             t_max, t_min = frac * t_max, self.throttle_min * frac * self.cfg.thrust_max
+
+        if self.cfg.guidance_mode == "range":
+            # Range-to-go velocity profile: the horizontal analogue of the
+            # vertical constant-deceleration law. Instead of commanding zero
+            # horizontal velocity (which lands wherever the trajectory ends,
+            # SIM-GD16) or ZEM/ZEV (which demands ~27 m/s2 against ~5.7
+            # available and runs the tanks dry), target the speed from which
+            # the remaining range can still be braked out:
+            #     v_des = sqrt(2 a_brake d)   toward the landing site.
+            # Self-limiting by construction, and it goes to zero AT the target.
+            to_target = np.array([-pos[0], -pos[1], 0.0])
+            d = float(np.linalg.norm(to_target))
+            v_horiz = vel - (vel @ L["up"]) * L["up"]
+            a_max_h = math.sqrt(max((self.cfg.thrust_cap * self.cfg.thrust_max / mass) ** 2
+                                    - a_up**2, 0.25))
+            if d > 1e-6:
+                v_des = math.sqrt(2.0 * self.cfg.range_brake * a_max_h * d) * (to_target / d)
+            else:
+                v_des = np.zeros(3)
+            a_vec = self.k_vx_range * (v_des - v_horiz)
+            n = float(np.linalg.norm(a_vec))
+            if n > 1e-9:
+                a_h = -n
+                L = dict(L); L["h_hat"] = -a_vec / n
+
+        if self.cfg.guidance_mode == "zemzev":
+            # ZEM/ZEV on the horizontal channel: the profile law controls only
+            # altitude and velocity, so where it lands is wherever the
+            # trajectory ends (2.4 km miss, SIM-GD16). This adds the missing
+            # position feedback. t_go comes from the vertical profile, which
+            # is the one timescale both channels already share.
+            t_go = max(math.sqrt(2.0 * max(alt, 0.0) / self.a_dec), 1.0)
+            horiz = np.array([pos[0], pos[1], 0.0])          # target is the origin
+            v_horiz = vel - (vel @ L["up"]) * L["up"]
+            zem = -(horiz + v_horiz * t_go)
+            zev = -v_horiz
+            a_vec = (6.0 / t_go**2) * zem - (2.0 / t_go) * zev
+            a_h = -float(np.linalg.norm(a_vec))
+            if abs(a_h) > 1e-9:
+                L = dict(L); L["h_hat"] = -a_vec / abs(a_h)
 
         a_mag = math.hypot(a_up, a_h)
         thrust = float(np.clip(mass * a_mag, t_min, t_max))

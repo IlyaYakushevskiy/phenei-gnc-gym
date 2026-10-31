@@ -31,7 +31,7 @@ def main() -> int:
     ap.add_argument("--k-vz", type=float, default=0.2)
     ap.add_argument("--dt", type=float, default=1.0 / 200.0)
     ap.add_argument("--seed", type=int, default=3)
-    ap.add_argument("--align", type=int, default=2, help="downrange alignment passes")
+    ap.add_argument("--align", type=int, default=4, help="downrange alignment passes")
     ap.add_argument("--serve", action="store_true")
     ap.add_argument("--out", default="studies/descent6dof.rrd")
     a = ap.parse_args()
