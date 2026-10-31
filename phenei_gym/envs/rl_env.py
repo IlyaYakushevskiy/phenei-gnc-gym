@@ -31,15 +31,18 @@ ACT_DIM = 3
 @dataclass
 class LandingTaskConfig:
     batch: BatchedConfig = field(default_factory=BatchedConfig)
-    start_altitude: float = 2000.0       # curriculum knob (TR-SIM-06)
-    start_alt_jitter: float = 400.0
-    start_speed: float = 120.0           # horizontal speed at episode start
-    start_speed_jitter: float = 40.0
-    start_offset: float = 900.0          # downrange offset from the target
-    start_offset_jitter: float = 300.0
+    start_altitude: float = 400.0        # curriculum knob (TR-SIM-06); start low,
+                                         # extend once soft landings are reliable
+    start_alt_jitter: float = 120.0
+    start_speed: float = 40.0            # horizontal speed at episode start
+    start_speed_jitter: float = 20.0
+    start_offset: float = 250.0          # downrange offset from the target
+    start_offset_jitter: float = 120.0
     max_tilt_cmd: float = 0.70           # rad, limit on commanded thrust tilt
     policy_hz: float = 10.0
-    max_seconds: float = 75.0
+    max_seconds: float = 45.0
+    corridor_accel: float = 4.0          # m/s^2, the descent-rate corridor
+    corridor_weight: float = 0.25
     mass0: float = 620.0                 # dry 500 + 120 kg for the last phase
 
 
@@ -99,7 +102,10 @@ class LandingTask:
         horiz = s.pos[:, :2].norm(dim=-1)
         alt = s.altitude().clamp_min(0.0)
         speed = s.vel.norm(dim=-1)
-        return -(0.004 * horiz + 0.004 * alt + 0.05 * speed + 2.0 * s.tilt())
+        # Shaping gradient has to be strong enough that descending and
+        # closing on the site beats loitering. With weak shaping the policy
+        # discovers that never touching down avoids the crash penalty.
+        return -(0.02 * horiz + 0.03 * alt + 0.30 * speed + 5.0 * s.tilt())
 
     def _observe(self) -> torch.Tensor:
         s = self.sim
@@ -129,9 +135,18 @@ class LandingTask:
         # 620 kg vehicle -> 2.7 m/s^2 NET UPWARD, so the vehicle climbs away and
         # every episode times out without ever touching the ground. Anchoring
         # the action at hover makes a = 0 neutral and the problem learnable.
+        # Anchored at hover but spanning the FULL range: a=0 hovers, a=+1 is
+        # the whole thrust cap, a=-1 is engines off. The earlier symmetric form
+        # hover*(1 + 1.2a) capped thrust at 2.2x hover = 2215 N of the 5400 N
+        # available -- only 1.95 m/s^2 of net braking, which needs 332 m to
+        # arrest 36 m/s in a 400 m episode. The task was unachievable, and the
+        # four "reward failures" before this were all that one bug.
         g_eff = (self.sim.mu / (s.pos[:, 2] + self.sim.radius).pow(2))
-        hover = (s.mass * g_eff) / (c.batch.thrust_cap * c.batch.thrust_max)
-        thrust_frac = (hover * (1.0 + 1.2 * a[:, 0])).clamp(0.0, 1.0)
+        hover = ((s.mass * g_eff) / (c.batch.thrust_cap * c.batch.thrust_max)).clamp(0.0, 1.0)
+        a0 = a[:, 0]
+        thrust_frac = torch.where(a0 >= 0.0,
+                                  hover + a0 * (1.0 - hover),
+                                  hover * (1.0 + a0)).clamp(0.0, 1.0)
         up = s.local_up()
         east = torch.tensor([1.0, 0.0, 0.0], device=self.device, dtype=self.dtype).expand(self.n, 3)
         east = east - (east * up).sum(-1, keepdim=True) * up
@@ -161,18 +176,38 @@ class LandingTask:
         shaping = self._shaping()
         reward = shaping - self.prev_shaping
         self.prev_shaping = shaping
-        reward = reward - 0.02                                   # time/propellant pressure
+        reward = reward - 0.05                                   # time/propellant pressure
+
+        # DENSE descent-rate corridor. The terminal crash penalty alone is too
+        # sparse to shape against: over 1e9 steps it only brought impact speed
+        # from 47 to 37 m/s. This gives a signal at every step, and it is not
+        # an arbitrary hack -- it is the same sqrt(2 a h) profile the classical
+        # guidance flies (SIM-GD01), so the policy is being told to stay inside
+        # a physically achievable braking envelope.
+        v_limit = torch.sqrt(2.0 * c.corridor_accel * alt.clamp_min(0.0)) + self.t02
+        over = (-v_up - v_limit).clamp_min(0.0) + (v_h - v_limit).clamp_min(0.0)
+        reward = reward - c.corridor_weight * over
 
         good = (landed & (horiz <= self.t01) & (v_up.abs() <= self.t02)
                 & (v_h <= self.t03) & (torch.rad2deg(tilt_now) <= self.t04))
         soft = landed & (v_up.abs() <= 4.0) & (v_h <= 3.0)
-        reward = reward + good.to(self.dtype) * 200.0
-        reward = reward + (soft & ~good).to(self.dtype) * 40.0
-        reward = reward - (landed & ~soft).to(self.dtype) * 60.0
-        reward = reward - out_of_fuel.to(self.dtype) * 60.0
-        reward = reward - diverged.to(self.dtype) * 60.0
-        # precision bonus, only once down and soft
-        reward = reward + soft.to(self.dtype) * (60.0 / (1.0 + horiz / 25.0))
+        hard = landed & ~soft
+        # Timing out must be WORSE than attempting a landing and failing, or
+        # the optimal policy is to loiter: a -60 crash against a -15 timeout
+        # taught exactly that, and the land rate collapsed to 1e-4.
+        reward = reward + good.to(self.dtype) * 300.0
+        reward = reward + (soft & ~good).to(self.dtype) * 80.0
+        # Crash penalty MUST scale with impact speed. A flat -40 is cheaper
+        # than the +60 of altitude shaping earned by descending 2000 m, so the
+        # policy learns to dive: over 100 iterations the miss distance improved
+        # but impact speed went 40 -> 72 m/s. Scaling with speed makes slamming
+        # in unambiguously worse than a controlled descent.
+        impact = (v_up.abs() + v_h).clamp_max(120.0)
+        reward = reward - hard.to(self.dtype) * (20.0 + 4.0 * impact)
+        reward = reward - out_of_fuel.to(self.dtype) * 80.0
+        reward = reward - diverged.to(self.dtype) * 80.0
+        reward = reward - timeout.to(self.dtype) * 80.0
+        reward = reward + soft.to(self.dtype) * (80.0 / (1.0 + horiz / 25.0))
 
         info = {"landed": landed, "good": good, "soft": soft, "diverged": diverged,
                 "out_of_fuel": out_of_fuel, "timeout": timeout,
