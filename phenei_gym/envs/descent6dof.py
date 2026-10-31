@@ -141,7 +141,14 @@ class Descent6DOF:
         L = self._local(pos, vel)
         alt = L["alt"]
         v_z_des = -math.sqrt(2.0 * self.a_dec * max(alt, 0.0) + self.v_touchdown**2)
-        a_up = L["g_eff"] + self.k_vz * (v_z_des - L["v_up"])
+        # FEEDFORWARD + feedback. The constant-deceleration profile itself
+        # requires a_dec of vertical deceleration on top of effective gravity;
+        # without that as a feedforward term the loop has to generate it from
+        # tracking error alone, which needs a large gain, which saturates the
+        # whole thrust budget. The result is a commanded attitude that
+        # bang-bangs between 0 and 90 deg -- survivable in 3-DOF where thrust
+        # direction is instantaneous, fatal in 6-DOF.
+        a_up = L["g_eff"] + self.a_dec + self.k_vz * (v_z_des - L["v_up"])
         a_h = -self.k_vx * L["v_h"]
 
         # Cap below T_max: differential throttle can only produce torque with
@@ -162,7 +169,14 @@ class Descent6DOF:
         # the guidance commands a 180 deg flip, which is both impossible at
         # realistic slew rates and the wrong manoeuvre.
         a_up_c = float(np.clip(a_up, 0.0, a_avail))
-        a_h_c = -math.sqrt(max(a_avail**2 - a_up_c**2, 0.0))
+        # Command the horizontal deceleration actually WANTED, limited by what
+        # is left after the vertical demand -- not the whole leftover budget.
+        # Spending the leftover unconditionally means that with the horizontal
+        # velocity already nulled the guidance still tilts the vehicle over
+        # (5.4 deg at touchdown), and earlier in the burn it is what makes the
+        # commanded attitude bang-bang between 0 and 90 deg.
+        a_h_budget = math.sqrt(max(a_avail**2 - a_up_c**2, 0.0))
+        a_h_c = -min(abs(a_h), a_h_budget)
         d = a_up_c * L["up"] + a_h_c * L["h_hat"]
         n = np.linalg.norm(d)
         return (d / n if n > 1e-9 else L["up"]), thrust
@@ -190,7 +204,13 @@ class Descent6DOF:
             if k % n_att == 0:
                 active = np.ones(self.layout.n)
                 if self._local(s[I_POS], s[I_VEL])["alt"] <= self.h_terminal:
-                    active[self.layout.main_idx[2:]] = 0.0   # shut down 2 of 4
+                    # TR-SIM-09 option B: shut down 2 of 4. They MUST be a
+                    # diametrically opposite pair (azimuths 90 and 270); taking
+                    # main_idx[2:] leaves engines at 0 and 90 deg, i.e. ADJACENT,
+                    # producing a constant torque no allocator can trim.
+                    mi = self.layout.main_idx
+                    if self.cfg.n_engines_terminal == 2:
+                        active[[mi[1], mi[3]]] = 0.0
                 self.ctl.inertia = self.inertia(mass)
                 self.ctl.kp = 2.0 * self.ctl.inertia * cfg.omega_n**2
                 self.ctl.kd = 2.0 * self.ctl.inertia * cfg.zeta * cfg.omega_n

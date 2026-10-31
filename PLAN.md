@@ -142,17 +142,19 @@ for Mattia, and the sim should quantify all three rather than assume one.
 - Gymnasium env + SB3 PPO. Goal: a policy that lands within a few percent of the convex optimum.
   This exists to prove the reward and the plumbing, nothing more.
 
-### Phase 2 — 6-DOF dynamics and the inner loop  *(IN PROGRESS, 31.10.2026)*
+### Phase 2 — 6-DOF dynamics and the inner loop  *(COMPLETE, 31.10.2026)*
 
 **Done**: rigid-body EOM with quaternion kinematics (`dynamics/rigid6dof.py`), verified against the
 3-DOF polar model to <1 m over 200 s; actuator layout and control-effectiveness matrix built from
 the `SIM-G*` rows (`actuators/layout.py`); weighted control allocation; quaternion-feedback
 attitude controller (`guidance/attitude.py`). 31 tests pass.
 
-**Open**: the integrated 6-DOF descent does not yet land — the attitude loop saturates and the
-vehicle tumbles. Cause is understood and recorded as `TR-SIM-19` / `SIM-GD09`-`GD11`: attitude
-authority depends on main-engine throttle headroom, and the current gains demand ~4 rad/s² where
-~2 is available. Next step is the `omega_n` sweep plus, if needed, a larger RCS tier.
+**Result**: the 6-DOF descent lands. From 75 km at 950 kg with a 90 % throttle cap: 409 kg
+propellant, touchdown at **0.99 m/s vertical, 0.00 m/s horizontal, 0.00 deg/s, 5.05° tilt**. Four
+of the five touchdown criteria pass with margin; tilt sits exactly on the `SIM-T04` limit, which is
+itself an LLM assumption since GNC-08 is TBD.
+
+Peak tilt is 64–66°, confirming `SIM-A16` from the independent 6-DOF path.
 
 - Rigid-body EOM, quaternion kinematics, batched over `N` envs on GPU.
 - Variable mass and inertia (`SIM-M09`), thrust misalignment and CoM offset as per-env constants.
@@ -216,6 +218,40 @@ Each is a sweep over `params.csv` rows, each writes a CSV:
    vehicle actually flies (`TR-SIM-14`). Output: required cant, and the real altimeter acquisition
    altitude.
 9. *(stretch)* end-to-end policy from raw sensors vs the EKF architecture (`TR-SIM-07`).
+
+### Phase 2.5 — presentable simulation visuals  *(ASAP, requested by Ilya 31.10.2026)*
+
+Pulled forward ahead of the RL work: the demo needs to look like a lunar landing, not a wireframe
+on a blank grid. Everything here is `viz/rerun_log.py` plus a small terrain module, and none of it
+depends on Phase 2 being finished, so it can proceed in parallel.
+
+1. **Lunar surface at the landing site.** Replace the single grey line with a textured terrain
+   mesh. Build the heightmap from `SIM-E06`/`SIM-E07` (slope, RMS roughness) plus craters and
+   rocks at `SIM-E08` density, log it as `rr.Mesh3D` with per-vertex colours shaded by local
+   normal and `SIM-E09` regolith albedo. This is the same heightmap the altimeter raycasts will
+   use in Phase 4, so it is not throwaway demo work — build it as `phenei_gym/terrain.py` and have
+   the viz read it. Optional upgrade: drape real LRO NAC imagery (0.5 m/px, cited in MCR §5.3.5)
+   over the mesh for the hero shot.
+2. **Draw the thrusters properly.** The 4 main nozzles and 8 RCS pods already exist in
+   `hopper_wireframe()` as line strips. Promote them to real geometry: nozzle bells as cones of
+   `SIM-G13` exit diameter, RCS pods as small boxes at `SIM-G15`/`SIM-G16`.
+3. **Main-engine plumes that fire with the actual commanded throttle.** One cone per engine,
+   logged per frame, length and width scaling with that engine's throttle from the allocation
+   vector, so the plume *is* the telemetry — you can see differential throttle working during a
+   pitch manoeuvre. Hot white-yellow core grading to orange, alpha falling off with distance. Zero
+   throttle must render nothing, not a stub. Note MON-3/MMH burns nearly invisibly in reality;
+   this is deliberately a readability choice, worth stating in the video.
+4. **Cold-gas RCS puffs.** Same mechanism, different look: short, narrow, pale blue-white, and
+   **on/off rather than proportional** — `SIM-P11` gives a 20 ms minimum on-time against a 10 ms
+   control period, so the RCS physically cannot modulate within a cycle. Rendering them as
+   discrete puffs is both prettier and more honest than a continuous jet.
+5. **Scale handling.** The existing split stays (`world/` in km, `vehicle/` in m) because the
+   trajectory is ~1000 km and the vehicle is 2 m. Add a third `closeup/` entity: vehicle plus the
+   local terrain patch in metres, which is the view the plumes and touchdown actually read in.
+
+Acceptance: a single `.rrd` that can be scrubbed from ignition to touchdown showing the hopper over
+textured terrain, pitched ~65° with four plumes lit, rotating upright as it descends, RCS puffing
+during attitude corrections, and the plumes visibly throttling down at the flare.
 
 ### Phase 7 — video
 Rerun timeline with the 3D vehicle, plume, terrain and landing ellipse; sensor telemetry panels

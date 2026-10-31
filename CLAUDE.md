@@ -26,9 +26,10 @@ ignition** and ends at touchdown — ConOps phases 7 and 8 only.
 
 Phase 0 and Phase 1 of `PLAN.md` are done: parameter loader, validated 3-DOF planar dynamics, a
 reference descent guidance law that lands inside the touchdown box, and Rerun visualisation.
-Phase 2 (6-DOF) is **partially done** — dynamics, actuator layout, allocation and the attitude
-controller are all written and unit-tested, but the integrated 6-DOF descent still tumbles; see
-`TR-SIM-19`. No RL yet (Phase 3).
+Phase 2 (6-DOF) is **done**: the hierarchical stack (10 Hz guidance / 100 Hz attitude PD /
+allocation / 400 Hz RK4) lands the vehicle — 0.99 m/s vertical, 0.00 m/s horizontal, 5.05° tilt.
+Phase 2.5 (presentable visuals: terrain, thruster plumes) is specified in `PLAN.md` and is the
+next priority. No RL yet (Phase 3).
 
 PyTorch 2.15.0+cu132 is installed and **CUDA works**: RTX 2080 SUPER, capability 7.5.
 
