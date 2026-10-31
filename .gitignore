@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- PHENEI GNC gym ---
+# Large CAD export (7 MB Parasolid, scale is wrong - use the SIM-G* rows instead)
+*.x_t
+# Scratch sweep scripts and their output
+studies/_*
+# Monte Carlo recordings; the curated reference recording is committed deliberately
+studies/mc_*.rrd

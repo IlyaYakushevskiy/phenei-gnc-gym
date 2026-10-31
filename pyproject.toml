@@ -1,0 +1,37 @@
+[project]
+name = "phenei-gym"
+version = "0.0.1"
+description = "Gymnasium-style simulation of powered descent and landing for the PHENEI lunar hopper"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+# installed in Phase 0/1 - light, no CUDA download
+sim = [
+    "rerun-sdk>=0.21",        # telemetry + 3D viewer (TR-SIM-05)
+    "cvxpy>=1.5",             # convex powered-descent baseline (TR-SIM-11)
+    "matplotlib>=3.8",
+    "pytest>=8.0",
+]
+# Phase 2+ - large CUDA download, install when needed
+rl = [
+    "torch>=2.4",
+    "gymnasium>=0.29",
+    "stable-baselines3>=2.3",
+    "tensorboard>=2.16",
+]
+# Phase 4+ - contact study and offscreen rendering
+render = [
+    "mujoco>=3.2",
+    "imageio[ffmpeg]>=2.34",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
