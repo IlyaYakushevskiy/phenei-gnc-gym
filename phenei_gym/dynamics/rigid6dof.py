@@ -78,6 +78,25 @@ def tilt_from_vertical(q: np.ndarray) -> float:
     return float(np.arccos(np.clip(body_z[2], -1.0, 1.0)))
 
 
+def local_up(position: np.ndarray, radius: float) -> np.ndarray:
+    """Local vertical at a landing-site-frame position."""
+    r_vec = np.array([position[0], position[1], position[2] + radius])
+    return r_vec / np.linalg.norm(r_vec)
+
+
+def tilt_from_local_vertical(q: np.ndarray, position: np.ndarray, radius: float) -> float:
+    """Angle [rad] between body +Z and the LOCAL vertical at the vehicle.
+
+    Use this, not ``tilt_from_vertical``. The landing-site frame's +Z is the
+    vertical *at the target*; 150 km downrange the local vertical differs from
+    it by 150/1737 rad = 5 deg, which is large enough to be mistaken for a
+    control error. Measuring against the wrong vertical cost several debugging
+    iterations before it was spotted.
+    """
+    body_z = quat_to_matrix(q)[:, 2]
+    return float(np.arccos(np.clip(body_z @ local_up(position, radius), -1.0, 1.0)))
+
+
 def gravity(position: np.ndarray, mu: float, radius: float) -> np.ndarray:
     """Point-mass lunar gravity at a landing-site-frame position."""
     r_vec = np.array([position[0], position[1], position[2] + radius])

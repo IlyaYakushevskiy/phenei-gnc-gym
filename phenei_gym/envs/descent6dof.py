@@ -23,7 +23,7 @@ from phenei_gym.actuators import ActuatorLayout
 from phenei_gym.dynamics import PlanarVehicle
 from phenei_gym.dynamics.rigid6dof import (
     I_MASS, I_OMEGA, I_POS, I_QUAT, I_VEL,
-    make_state, quat_to_matrix, rk4_step, tilt_from_vertical,
+    make_state, quat_to_matrix, rk4_step, tilt_from_local_vertical, tilt_from_vertical,
 )
 from phenei_gym.guidance import min_energy_arc
 from phenei_gym.guidance.attitude import AttitudeController, quat_pointing
@@ -45,6 +45,8 @@ class Descent6DOFConfig:
     thrust_cap: float = 0.90                 # SIM-GD07: headroom reserved for
                                              # differential-throttle attitude control
     k_vz: float = None                       # SIM-GD08 (6-DOF gain, lower than 3-DOF)
+    initial_downrange: float = 0.0           # m; start upstream so touchdown lands on the
+                                             # landing site at the frame origin
 
     def __post_init__(self):
         if self.ignition_altitude is None:
@@ -85,7 +87,7 @@ class Result6DOF:
         return {
             "v_vertical": v_up,
             "v_horizontal": float(np.linalg.norm(v - v_up * up)),
-            "tilt_deg": math.degrees(tilt_from_vertical(s[I_QUAT])),
+            "tilt_deg": math.degrees(tilt_from_local_vertical(s[I_QUAT], s[I_POS], radius)),
             "rate_deg_s": math.degrees(float(np.linalg.norm(s[I_OMEGA]))),
             "miss_m": float(np.linalg.norm(s[I_POS][:2])),
         }
@@ -118,7 +120,7 @@ class Descent6DOF:
     def initial_state(self) -> np.ndarray:
         st = self._ic
         r0 = st["radius"]
-        pos = np.array([0.0, 0.0, r0 - self.radius])
+        pos = np.array([self.cfg.initial_downrange, 0.0, r0 - self.radius])
         vel = np.array([st["v_horizontal"], 0.0, st["v_vertical"]])
         # start already pointing where guidance will want it
         q0 = quat_pointing(self._thrust_direction(pos, vel, mass=self.cfg.mass)[0])
@@ -225,8 +227,8 @@ class Descent6DOF:
             t += dt
 
             ts.append(t); xs.append(s.copy()); us.append(u.copy())
-            tilts.append(tilt_from_vertical(s[I_QUAT]))
-            tilt_cmds.append(tilt_from_vertical(q_cmd))
+            tilts.append(tilt_from_local_vertical(s[I_QUAT], s[I_POS], self.radius))
+            tilt_cmds.append(tilt_from_local_vertical(q_cmd, s[I_POS], self.radius))
 
             L = self._local(s[I_POS], s[I_VEL])
             if L["alt"] <= 0.0:
