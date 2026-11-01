@@ -98,9 +98,11 @@ Single-seed, Config 1 (camera feature tracking):
 | no cant, real terrain | 4198 m | **43.5 m** | 0.08 m/s |
 | 60° cant, real terrain | 7979 m | 25.2 m | 0.19 m/s |
 
-**Terrain slope roughly triples the touchdown position error.** At 43.5 m that
-is most of the 50 m accuracy budget consumed by navigation alone, before any
-guidance error. Canting the boresights halves it.
+Over 20 seeds with real terrain the picture is: **29.2 m mean / 48.4 m at the
+95th percentile** uncanted, against 17.9 / 32.3 m with a 60° cant. So terrain
+slope inflates the navigation error by ~1.6×, and at the 95th percentile it
+consumes **essentially the entire 50 m accuracy budget on navigation alone**,
+before any guidance error. Canting the boresights recovers most of it.
 
 The filter is consistent: the error sits inside its reported 1σ in every
 altitude band, and the position σ grows monotonically through the

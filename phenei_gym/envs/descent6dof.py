@@ -75,6 +75,22 @@ class Descent6DOFConfig:
     thrust_scale: float = 1.0                # multiplicative on delivered thrust
     isp_scale: float = 1.0                   # multiplicative on Isp
 
+    # --- Closed-loop navigation (Phase 4 acceptance).
+    #
+    # With navigation=False the controller is handed TRUTH, which is the
+    # reference case and what every result before this used. With
+    # navigation=True the sensors and the MEKF run inside the integration loop
+    # and guidance + attitude control see only the ESTIMATE -- which is the
+    # only configuration in which the question "how much sensor noise does the
+    # loop tolerate" has an answer, because in replay the noise cannot feed
+    # back into the trajectory at all.
+    navigation: bool = False
+    nav_config: str = "1"                    # sensor suite: "1" or "2"
+    nav_cant_deg: float = 0.0                # boresight cant aft (TR-SIM-14)
+    nav_noise_scale: float = 1.0             # multiplier on ALL sensor noise
+    nav_seed: int = 0
+    nav_rate: float = 200.0                  # Hz, filter propagation rate
+
     def __post_init__(self):
         if self.ignition_altitude is None:
             self.ignition_altitude = PARAMS.value("SIM-A19") * 1e3
@@ -94,6 +110,8 @@ class Result6DOF:
     reason: str
     cfg: Descent6DOFConfig
     layout: ActuatorLayout = field(repr=False, default=None)
+    #: (t, pos_err, vel_err, pos_sigma, vel_sigma) when navigation is closed.
+    nav_error: np.ndarray = field(repr=False, default=None)
 
     @property
     def altitude(self) -> np.ndarray:
@@ -141,9 +159,94 @@ class Descent6DOF:
         st = min_energy_arc().state_at_altitude(self.cfg.ignition_altitude)
         self.a_dec = st["v_vertical"] ** 2 / (2.0 * self.cfg.ignition_altitude)
         self._ic = st
+        self.nav = None
+        self.suite = None
+        if self.cfg.navigation:
+            self._build_nav()
+
+    def _build_nav(self) -> None:
+        """Sensor suite + MEKF, with every noise figure scaled together."""
+        from phenei_gym.nav import MEKF, MEKFConfig, NavState
+        from phenei_gym.sensors import SensorSuite
+
+        cfg = self.cfg
+        self._nav_rng = np.random.default_rng(cfg.nav_seed)
+        suite = SensorSuite.baseline(self._nav_rng, config=cfg.nav_config,
+                                     cant_deg=cfg.nav_cant_deg)
+        k = cfg.nav_noise_scale
+        if k != 1.0:
+            # Scale the noise DENSITIES and the biases together, so the sweep
+            # moves one dial that means "this sensor suite is k times worse"
+            # rather than k separate dials nobody can interpret.
+            suite.imu.arw *= k
+            suite.imu.vrw *= k
+            suite.imu.rrw_gyro *= k
+            suite.imu.rrw_accel *= k
+            suite.imu.turn_on_gyro *= k
+            suite.imu.turn_on_accel *= k
+            suite.imu.draw_biases(self._nav_rng)
+            suite.star.sigma_cross *= k
+            suite.star.sigma_roll *= k
+            suite.trn.sigma *= k
+            for a in suite.altimeters:
+                a.sigma_floor *= k
+                a.sigma_frac *= k
+            suite.velocity.sigma_floor = getattr(suite.velocity, "sigma_floor", 0.0) * k
+            if hasattr(suite.velocity, "sigma"):
+                suite.velocity.sigma *= k
+        self.suite = suite
+        mcfg = MEKFConfig.from_imu(suite.imu)
+        self._MEKF, self._NavState, self._mcfg = MEKF, NavState, mcfg
 
     def inertia(self, mass: float) -> np.ndarray:
         return self._I_ref * (mass / self._m_ref)
+
+    # ------------------------------------------------------------------
+    # Closed-loop navigation
+    # ------------------------------------------------------------------
+    def _nav_step(self, nav, s_true, prev_vel, dt_nav: float, t: float) -> None:
+        """Sample the sensors from truth, propagate and correct the filter."""
+        from phenei_gym.dynamics.rigid6dof import gravity as _grav
+        from phenei_gym.sensors import Truth
+
+        rng = self._nav_rng
+        suite = self.suite
+        # Inertial acceleration over the last navigation interval. A backward
+        # difference, not a central one: inside a causal loop the future state
+        # does not exist yet.
+        accel = (s_true[I_VEL] - prev_vel) / dt_nav if dt_nav > 0 else np.zeros(3)
+        tr = Truth(t=t, pos=s_true[I_POS].copy(), vel=s_true[I_VEL].copy(),
+                   quat=s_true[I_QUAT].copy(), omega=s_true[I_OMEGA].copy(),
+                   accel_inertial=accel,
+                   gravity=_grav(s_true[I_POS], self.veh.mu, self.radius))
+
+        om, ac = suite.imu.sample(tr, dt_nav, rng)
+        nav.propagate(om, ac, dt_nav)
+
+        if (q := suite.star.sample(tr, rng)) is not None:
+            nav.update_star(q, suite.star.covariance)
+        if (fix := suite.trn.sample(tr, rng)) is not None:
+            nav.update_trn(fix[0], fix[1])
+        for alt in suite.altimeters:
+            if (r := alt.sample(tr, rng, None)) is not None:
+                nav.update_altimeter(r, alt.boresight_body, alt.sigma_at(r))
+        if (vm := suite.velocity.sample(tr, rng)) is not None:
+            nav.update_velocity(vm[0], vm[1],
+                                horizontal_only=(self.cfg.nav_config != "2"))
+
+    def _nav_state_vector(self, nav, s_true) -> np.ndarray:
+        """A 14-state built from the ESTIMATE, for the controller to act on.
+
+        Mass and body rates are taken from truth: mass comes from the
+        propulsion system's own bookkeeping rather than the navigation filter,
+        and body rate is a direct gyro measurement that the attitude loop uses
+        raw at 100 Hz. Only position, velocity and attitude are estimated.
+        """
+        e = s_true.copy()
+        e[I_POS] = nav.x.pos
+        e[I_VEL] = nav.x.vel
+        e[I_QUAT] = nav.x.quat
+        return e
 
     def initial_state(self) -> np.ndarray:
         st, c = self._ic, self.cfg
@@ -271,14 +374,36 @@ class Descent6DOF:
         reason = "t_max reached"
         t = 0.0
 
+        nav = None
+        nav_err = []
+        if cfg.navigation:
+            rng = self._nav_rng
+            m = self._mcfg
+            # Handed over from the ballistic hop with an error it does not know
+            # about -- the same convention as scripts/run_nav.py.
+            nav = self._MEKF(m, self._NavState(
+                pos=s[I_POS] + rng.normal(0.0, m.sigma0_pos / math.sqrt(3), 3),
+                vel=s[I_VEL] + rng.normal(0.0, m.sigma0_vel / math.sqrt(3), 3),
+                quat=s[I_QUAT].copy()))
+            n_nav = max(1, int(round(1.0 / (cfg.nav_rate * dt))))
+            prev_vel = s[I_VEL].copy()
+
         for k in range(int(cfg.t_max / dt)):
             mass = s[I_MASS]
+
+            if nav is not None and k % n_nav == 0:
+                self._nav_step(nav, s, prev_vel, n_nav * dt, t)
+                prev_vel = s[I_VEL].copy()
+
+            # The state the CONTROLLER sees. Truth when navigation is off.
+            e = s if nav is None else self._nav_state_vector(nav, s)
+
             if k % n_gui == 0:
-                d_world, thrust_cmd = self._thrust_direction(s[I_POS], s[I_VEL], mass)
+                d_world, thrust_cmd = self._thrust_direction(e[I_POS], e[I_VEL], mass)
                 q_cmd = quat_pointing(d_world)
             if k % n_att == 0:
                 active = np.ones(self.layout.n)
-                if self._local(s[I_POS], s[I_VEL])["alt"] <= self.h_terminal:
+                if self._local(e[I_POS], e[I_VEL])["alt"] <= self.h_terminal:
                     # TR-SIM-09 option B: shut down 2 of 4. They MUST be a
                     # diametrically opposite pair (azimuths 90 and 270); taking
                     # main_idx[2:] leaves engines at 0 and 90 deg, i.e. ADJACENT,
@@ -289,7 +414,7 @@ class Descent6DOF:
                 self.ctl.inertia = self.inertia(mass)
                 self.ctl.kp = 2.0 * self.ctl.inertia * cfg.omega_n**2
                 self.ctl.kd = 2.0 * self.ctl.inertia * cfg.zeta * cfg.omega_n
-                u = self.ctl.command(s, q_cmd, thrust_cmd, active=active)
+                u = self.ctl.command(e, q_cmd, thrust_cmd, active=active)
                 if mass <= self.veh.mass_dry:
                     u = np.zeros(self.layout.n)
 
@@ -306,6 +431,10 @@ class Descent6DOF:
             t += dt
 
             ts.append(t); xs.append(s.copy()); us.append(u.copy())
+            if nav is not None:
+                nav_err.append((t, float(np.linalg.norm(nav.x.pos - s[I_POS])),
+                                float(np.linalg.norm(nav.x.vel - s[I_VEL])),
+                                nav.rss("pos"), nav.rss("vel")))
             tilts.append(tilt_from_local_vertical(s[I_QUAT], s[I_POS], self.radius))
             tilt_cmds.append(tilt_from_local_vertical(q_cmd, s[I_POS], self.radius))
 
@@ -321,4 +450,6 @@ class Descent6DOF:
         tilts.append(tilts[-1] if tilts else 0.0)
         tilt_cmds.append(tilt_cmds[-1] if tilt_cmds else 0.0)
         return Result6DOF(np.asarray(ts), np.asarray(xs), np.asarray(us),
-                          np.asarray(tilts), np.asarray(tilt_cmds), reason, cfg, self.layout)
+                          np.asarray(tilts), np.asarray(tilt_cmds), reason, cfg,
+                          self.layout,
+                          np.asarray(nav_err) if nav_err else None)

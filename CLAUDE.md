@@ -24,12 +24,21 @@ ignition** and ends at touchdown — ConOps phases 7 and 8 only.
 
 ## Repository status
 
-Phase 0 and Phase 1 of `PLAN.md` are done: parameter loader, validated 3-DOF planar dynamics, a
-reference descent guidance law that lands inside the touchdown box, and Rerun visualisation.
-Phase 2 (6-DOF) is **done**: the hierarchical stack (10 Hz guidance / 100 Hz attitude PD /
-allocation / 400 Hz RK4) lands the vehicle — 0.99 m/s vertical, 0.00 m/s horizontal, 5.05° tilt.
-Phase 2.5 (presentable visuals: terrain, thruster plumes) is specified in `PLAN.md` and is the
-next priority. No RL yet (Phase 3).
+Phases 0–5 are done, plus most of 6 and 7. `design_docs/FINDINGS.md` is the readable summary of
+what the simulation has actually established — **read it before starting anything new**, because
+several of the MCR's stated numbers have been shown to be infeasible and the results build on
+each other.
+
+| Phase | State |
+|---|---|
+| 0–1 param loader, 3-DOF dynamics, reference descent, Rerun | done; `validate_mcr.py` 15/15 |
+| 2 6-DOF hierarchical stack | done; lands meeting all five touchdown criteria |
+| 2.5 presentable visuals (terrain, nozzles, plumes) | done except the `closeup/` entity |
+| 3 RL | done to a defensible result: BC+PPO 76.1 % soft, does **not** beat classical |
+| 4 sensors + MEKF, closed-loop navigation | done |
+| 5 Monte Carlo campaign | done; produced the decisive negative result (`TR-SIM-23`) |
+| 6 engineering studies | noise-tolerance harness built (`scripts/noise_study.py`) |
+| 7 video | `scripts/make_video.py` builds the combined `.rrd` |
 
 PyTorch 2.15.0+cu132 is installed and **CUDA works**: RTX 2080 SUPER, capability 7.5.
 
@@ -37,16 +46,36 @@ PyTorch 2.15.0+cu132 is installed and **CUDA works**: RTX 2080 SUPER, capability
 python3 -m venv .venv                                   # already created
 .venv/bin/python -m pip install numpy scipy matplotlib pytest rerun-sdk
 
-.venv/bin/python scripts/validate_mcr.py                # Phase 1 gate: MUST be 15/15
+.venv/bin/python scripts/validate_mcr.py                # the gate: MUST be 15/15
 .venv/bin/python scripts/params_report.py               # provenance of params.csv
-.venv/bin/python -m pytest tests/ -q                    # 31 tests
+.venv/bin/python -m pytest tests/ -q                    # 92 tests, ~2 min
 .venv/bin/python -m pytest tests/test_descent.py -q -k touchdown   # single test
 
-.venv/bin/python scripts/run_descent.py                 # reference descent -> .rrd + .png
-.venv/bin/python scripts/run_descent.py --thrust 4000 --altitude 96
-.venv/bin/python scripts/run_descent.py --serve         # live web viewer on :9090
-scripts/view.sh                                         # view a recording (see note)
+.venv/bin/python scripts/run_descent.py                 # 3-DOF reference -> .rrd + .png
+.venv/bin/python scripts/run_descent6dof.py             # 6-DOF, aligned to the site
+.venv/bin/python scripts/run_nav.py --cant 60 --seeds 20   # navigation error budget
+.venv/bin/python scripts/mc_campaign.py --cases 48 --x0 -173.550
+.venv/bin/python scripts/noise_study.py --x0 -173.550   # sensor-noise tolerance
+.venv/bin/python scripts/make_video.py --x0 -173.550    # the deliverable recording
+scripts/view.sh <file.rrd>                              # view a recording (see note)
 ```
+
+**Always pass `--x0 -173.550` where a script accepts it.** Solving the nominal ignition point
+takes five full 6-DOF descents (~9 minutes under load); that value is the converged answer for
+the 6 kN / 60 km baseline and re-solving it wastes most of a turn.
+
+### Things that will bite you
+
+- **A single 6-DOF descent is ~89 000 RK4 steps and takes 20–90 s.** Anything that flies many of
+  them needs `ProcessPoolExecutor`, and anything that re-flies the *same* trajectory should cache
+  it (`scripts/run_nav.py` does; it was re-flying it once per Monte Carlo seed).
+- **Never use `pkill -f <pattern>` or `pgrep -f <pattern>`** where the pattern also matches this
+  shell's own command line. It kills the shell mid-command (exit 144) and silently loses
+  heredoc-written files. Use `ps -eo pid,cmd | grep 'name[.]py'` and kill by PID.
+- `params.csv` values carry human annotations like `0.5 (1 sigma)`; `Param.as_float()` strips a
+  trailing parenthetical. Compound entries like `1 m + 0.1% of range` are **not** parseable — they
+  are split into scalar rows (`SIM-S36`/`S37`) for code to read.
+- Rows `P-xx` in `params.csv` are the team's and **must not be edited**.
 
 `validate_mcr.py` is the gate: it reproduces the MCR's published delta-v, flight time and apoapsis
 from the dynamics, checks conservation and RK4 convergence order, and confirms `SIM-A05`-`A08`.
@@ -226,6 +255,21 @@ Flag these rather than silently resolving them:
   (`SIM-H05`) against ~30 m needed, and the perception latency alone is 3.5 s of the 6 s
   (`SIM-H07`). HDA has to move up to **300–500 m** (`SIM-H06`), or be replaced by orbital
   pre-screening of the site. See `TR-SIM-13`.
+- **The guidance law does not meet the landing-accuracy requirement under dispersion**
+  (`TR-SIM-23`, `SIM-MC11`). The nominal case lands at 21 m, but the Monte Carlo CEP is **4447 m**
+  and R95 is 8326 m against a 50 m requirement — 0 of 24 cases pass. This is *not* a tuning
+  problem: the altitude-priority law tracks velocity profiles and never looks at where the site
+  is, so an injection velocity error integrates unattenuated over a 222 s burn. Closed-loop
+  position guidance (`TR-SIM-11`, convex) is mandatory. **Do not try to tune your way out of
+  this** — `TR-SIM-20` records two position-feedback attempts that both fail for the same
+  structural reason (with the timeline fixed by a vertical profile, range and velocity are not
+  independently controllable).
+- **There is effectively no propellant margin** (`SIM-MC12`). The nominal burn uses 368 kg of the
+  380 kg loaded, and 11 of 24 dispersed cases ran the tanks dry before touchdown.
+- **Navigation error is amplified, not attenuated.** With navigation closed, 22 m of final
+  position error produced a 72.6 m miss, because the position-open-loop guidance never corrects
+  the steering error the estimate induced. Do not add nav error to guidance miss in quadrature
+  and expect it to hold under this law.
 
 ## Conventions
 

@@ -301,3 +301,59 @@ def test_position_is_unobservable_without_fixes():
             marks.append(f.rss("pos"))
     assert marks == sorted(marks), "position sigma must grow monotonically"
     assert marks[-1] > 2.0 * marks[0]
+
+
+# ----------------------------------------------------------------------
+# Closed-loop navigation in the 6-DOF descent
+# ----------------------------------------------------------------------
+def test_closed_loop_navigation_still_lands():
+    """The controller flying on the ESTIMATE instead of truth. This is the
+    only configuration in which sensor noise can affect the trajectory at
+    all, so it is what makes the noise-tolerance question answerable."""
+    from phenei_gym.envs.descent6dof import Descent6DOF, Descent6DOFConfig
+    cfg = Descent6DOFConfig(initial_downrange=-173550.0, navigation=True,
+                            nav_cant_deg=60.0, nav_seed=0)
+    res = Descent6DOF(cfg).run()
+    assert res.reason == "touchdown"
+    assert res.nav_error is not None and len(res.nav_error) > 1000
+    td = res.touchdown()
+    assert abs(td["v_vertical"]) < 3.0
+    assert td["tilt_deg"] < 5.0
+    # navigation error is bounded, and the filter knows roughly how big it is
+    assert res.nav_error[-1, 1] < 150.0
+
+
+def test_zero_noise_navigation_tracks_truth():
+    """With nav_noise_scale = 0 the filter should converge essentially onto
+    truth, so the closed loop must reproduce the truth-fed trajectory."""
+    from phenei_gym.envs.descent6dof import Descent6DOF, Descent6DOFConfig
+    base = dict(initial_downrange=-173550.0, nav_cant_deg=60.0)
+    truth = Descent6DOF(Descent6DOFConfig(navigation=False, **base)).run()
+    clean = Descent6DOF(Descent6DOFConfig(navigation=True, nav_noise_scale=0.0,
+                                          nav_seed=0, **base)).run()
+    assert clean.reason == "touchdown"
+    # The handover error is still drawn (the filter starts off truth), so this
+    # is not bit-exact -- but the two must land in the same neighbourhood.
+    assert abs(clean.touchdown()["miss_m"] - truth.touchdown()["miss_m"]) < 120.0
+    assert clean.nav_error[-1, 1] < truth.touchdown()["miss_m"] + 100.0
+
+
+def test_noise_scale_actually_scales_the_sensors():
+    from phenei_gym.envs.descent6dof import Descent6DOF, Descent6DOFConfig
+    a = Descent6DOF(Descent6DOFConfig(navigation=True, nav_noise_scale=1.0))
+    b = Descent6DOF(Descent6DOFConfig(navigation=True, nav_noise_scale=4.0))
+    assert b.suite.imu.arw == pytest.approx(4.0 * a.suite.imu.arw)
+    assert b.suite.trn.sigma == pytest.approx(4.0 * a.suite.trn.sigma)
+    assert b.suite.star.sigma_cross == pytest.approx(4.0 * a.suite.star.sigma_cross)
+    assert b.suite.altimeters[0].sigma_floor == pytest.approx(
+        4.0 * a.suite.altimeters[0].sigma_floor)
+
+
+def test_controller_sees_the_estimate_not_truth():
+    """Guard against the obvious implementation slip: if the estimate were
+    not actually wired into the control path, noise would change nothing."""
+    from phenei_gym.envs.descent6dof import Descent6DOF, Descent6DOFConfig
+    base = dict(initial_downrange=-173550.0, navigation=True, nav_seed=1)
+    quiet = Descent6DOF(Descent6DOFConfig(nav_noise_scale=0.2, **base)).run()
+    loud = Descent6DOF(Descent6DOFConfig(nav_noise_scale=8.0, **base)).run()
+    assert quiet.touchdown()["miss_m"] != loud.touchdown()["miss_m"]
