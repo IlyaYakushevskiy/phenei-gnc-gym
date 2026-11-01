@@ -178,6 +178,15 @@ class Descent6DOF:
 
         cfg = self.cfg
         self._nav_rng = np.random.default_rng(cfg.nav_seed)
+        # SEPARATE stream for the handover error, so it is identical across
+        # noise levels for a given nav_seed. Sharing one stream made the noise
+        # sweep meaningless: changing nav_noise_scale changes how many draws
+        # the suite consumes (draw_biases is only called when k != 1), which
+        # changes the handover error, so the sweep compared different initial
+        # conditions rather than different noise levels. Caught because
+        # near-perfect navigation (0.2 m error) scored a 439 m miss while
+        # 22 m of navigation error scored 74 m -- impossible as a noise trend.
+        self._handover_rng = np.random.default_rng(100000 + cfg.nav_seed)
         suite = SensorSuite.baseline(self._nav_rng, config=cfg.nav_config,
                                      cant_deg=cfg.nav_cant_deg)
         # A sensor with ZERO noise is not the limiting case of a real one, it
@@ -407,7 +416,7 @@ class Descent6DOF:
         nav = None
         nav_err = []
         if cfg.navigation:
-            rng = self._nav_rng
+            rng = self._handover_rng
             m = self._mcfg
             # Handed over from the ballistic hop with an error it does not know
             # about -- the same convention as scripts/run_nav.py.
