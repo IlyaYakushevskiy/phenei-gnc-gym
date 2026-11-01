@@ -123,6 +123,14 @@ class MEKFConfig:
     rrw_accel: float = 0.0
     # outlier gate, chi-square threshold in sigmas
     gate: float = 5.0
+    # Absolute innovation beyond which a measurement is physically
+    # implausible regardless of what the covariance claims. These are the
+    # second half of the gate; see MEKF._update(). Set well above any
+    # credible transient and well below a genuine sensor fault.
+    gate_abs_pos: float = 2000.0        # m, TRN fix vs estimate
+    gate_abs_range: float = 1000.0      # m, altimeter slant range
+    gate_abs_att: float = 0.35          # rad (~20 deg), star tracker
+    gate_abs_vel: float = 50.0          # m/s
     mu: float = 0.0
     radius: float = 0.0
 
@@ -203,12 +211,29 @@ class MEKF:
 
     # ------------------------------------------------------------------
     def _update(self, H: np.ndarray, residual: np.ndarray, R: np.ndarray,
-                tag: str) -> bool:
+                tag: str, abs_gate: float = float("inf")) -> bool:
         """Joseph-form update with a Mahalanobis gate. True if accepted.
 
-        ``R`` is floored at ``R_FLOOR`` for numerical safety. What actually
-        keeps the gate from blinding the filter is the model-error floor on
-        ``Q`` -- see the ``Q_*_MODEL`` constants.
+        The gate requires the innovation to be surprising **both** in sigmas
+        and in absolute physical terms (``abs_gate``). A purely statistical
+        gate is unsafe here, because it trusts the filter's own covariance to
+        decide what is an outlier -- and the covariance is exactly the thing
+        that goes wrong.
+
+        The failure this guards against, measured rather than assumed: with
+        very precise sensors, P collapses before the slowly-observable states
+        have converged. Velocity is not directly observed above ~2 km, so the
+        filter becomes certain of position while still ~3 m/s wrong in
+        velocity, and attitude certainty collapses on the star tracker. A
+        slant-range prediction at 16 km is then wildly sensitive to boresight
+        pointing (0.1 deg of attitude error is 27 m of range), so every
+        altimeter innovation looks like a 300-sigma outlier. Counts over one
+        descent: 1458 altimeter updates rejected and 7 accepted, against 0
+        and 1408 at nominal noise. With no altitude measurements the vehicle
+        mis-flew the profile and exhausted its propellant.
+
+        Classic EKF covariance collapse; the statistical-only gate turns slow
+        convergence into permanent blindness.
         """
         R = R + np.eye(len(residual)) * R_FLOOR
         S = H @ self.P @ H.T + R
@@ -218,7 +243,9 @@ class MEKF:
             self.rejected[tag] += 1
             return False
         maha = float(residual @ Sinv @ residual)
-        if maha > self.cfg.gate ** 2 * len(residual):
+        big_in_sigmas = maha > self.cfg.gate ** 2 * len(residual)
+        big_in_absolute = float(np.linalg.norm(residual)) > abs_gate
+        if big_in_sigmas and big_in_absolute:
             self.rejected[tag] += 1
             return False
         K = self.P @ H.T @ Sinv
@@ -249,12 +276,14 @@ class MEKF:
         residual = 2.0 * dq[:3]                 # world-frame small angle
         H = np.zeros((3, NX)); H[:, I_DTH] = np.eye(3)
         rot = quat_to_matrix(self.x.quat)
-        return self._update(H, residual, rot @ cov_body @ rot.T, "star")
+        return self._update(H, residual, rot @ cov_body @ rot.T, "star",
+                            abs_gate=self.cfg.gate_abs_att)
 
     def update_trn(self, fix_xy: np.ndarray, sigma: float) -> bool:
         residual = np.asarray(fix_xy, dtype=float) - self.x.pos[:2]
         H = np.zeros((2, NX)); H[0, 6] = 1.0; H[1, 7] = 1.0
-        return self._update(H, residual, np.eye(2) * sigma ** 2, "trn")
+        return self._update(H, residual, np.eye(2) * sigma ** 2, "trn",
+                            abs_gate=self.cfg.gate_abs_pos)
 
     def update_altimeter(self, rng_m: float, boresight_body: np.ndarray,
                          sigma: float) -> bool:
@@ -277,7 +306,8 @@ class MEKF:
         H[0, 8] = 1.0 / c                                        # d rho / d p_z
         H[0, I_DTH] = -(rho_hat / c) * (skew(b)[2, :])           # d rho / d dtheta
         return self._update(H, np.array([rng_m - rho_hat]),
-                            np.array([[sigma ** 2]]), "alt")
+                            np.array([[sigma ** 2]]), "alt",
+                            abs_gate=self.cfg.gate_abs_range)
 
     def update_velocity(self, vel_m: np.ndarray, sigma: float,
                         horizontal_only: bool = False) -> bool:
@@ -290,4 +320,5 @@ class MEKF:
             residual = v - self.x.vel
             H = np.zeros((3, NX)); H[:, I_DV] = np.eye(3)
             R = np.eye(3) * sigma ** 2
-        return self._update(H, residual, R, "vel")
+        return self._update(H, residual, R, "vel",
+                            abs_gate=self.cfg.gate_abs_vel)

@@ -104,6 +104,8 @@ slope inflates the navigation error by ~1.6×, and at the 95th percentile it
 consumes **essentially the entire 50 m accuracy budget on navigation alone**,
 before any guidance error. Canting the boresights recovers most of it.
 
+(The nominal guidance miss for comparison is 11.6 m — `SIM-MC14`.)
+
 The filter is consistent: the error sits inside its reported 1σ in every
 altitude band, and the position σ grows monotonically through the
 measurement-free coast, which is the correct behaviour.
@@ -140,6 +142,48 @@ accuracy, which **I invented** at 0.5 m/s. If the real figure is better than
 ~0.3 m/s, Config 1 is comfortable. If it is worse, Config 1 cannot meet
 `SIM-T03` at all. **This is the single highest-value number you can give me**,
 and the recommendation stays conditional until it exists.
+
+---
+
+## 3b. Landing accuracy is not met under dispersion, and the cause is the engines
+
+**`TR-SIM-23`, `SIM-MC11`–`MC16`** — for Mattia (PRP), Freddy (MA) and Ilya (SE).
+
+This is the decisive negative result of the project.
+
+| Dispersion applied | CEP |
+|---|---|
+| none (determinism check) | **11.6 m** |
+| engine performance only — 2 % thrust, 1 % Isp | **3251 m** |
+| engine + full injection dispersion | 2452–3251 m |
+
+The nominal case lands at 11.6 m meeting all five touchdown criteria. **A 2 %
+engine tolerance on its own costs 3.3 km of landing accuracy**, and adding the
+whole injection dispersion on top barely changes it.
+
+So the instinctive fix — tighten injection knowledge — buys nothing. The cause
+is that the altitude-priority guidance law tracks *velocity profiles* and never
+looks at where the landing site is, so any perturbation integrates
+unattenuated over a 222 s burn. **Closed-loop position guidance is mandatory,
+not an optimisation.** `TR-SIM-20` records two cheaper position-feedback
+attempts that both fail for the same structural reason: with the descent
+timeline fixed by a vertical profile, horizontal range and horizontal velocity
+are not independently controllable. The vertical timeline has to be inside the
+optimisation, which is what the convex formulation does.
+
+Two secondary findings from the same campaign:
+
+- **There is effectively no propellant margin** (`SIM-MC12`). The nominal burn
+  uses 368 kg of the 380 kg loaded, and 11 of 24 dispersed cases ran the tanks
+  dry before touchdown. Arguably more urgent than the accuracy problem.
+- Relaxing `SIM-T01` to the 100 m reading does not help at this error
+  magnitude. Recorded so nobody proposes it as a shortcut.
+
+**How to read these numbers** (`SIM-MC16`): the miss distribution is
+heavy-tailed, so a 48-case CEP is only good to tens of percent — the sweep
+produced `inject-scale 0.05` at 2492 m against `0.00` at 3251 m, which is
+sampling noise, not a real ordering. Treat these as kilometres-not-metres
+results, and use several hundred cases before comparing close configurations.
 
 ---
 
@@ -243,8 +287,21 @@ measure-zero event at random initialisation. Behaviour-cloning the classical
 guidance reaches 31.7 %, and PPO fine-tuning on top reaches **76.1 %** soft
 landings at 3.41 m/s mean impact.
 
-It does **not** beat the classical guidance, which lands at 21 m and 0.98 m/s
-meeting all five touchdown criteria. The learned policy's mean miss is ~95 m.
+It does **not** beat the classical guidance, which lands at 11.6 m and
+0.99 m/s meeting all five touchdown criteria. The learned policy's mean miss
+is ~95 m.
+
+Two caveats that matter before anyone quotes the 76 % figure:
+
+- **Run-to-run variance is ~25 points** (`SIM-RL13`). Two behaviour-cloning
+  runs with identical dynamics, expert and loss scored 31.7 % and 57.0 %. The
+  cause is the DAgger feedback loop — training rolls forward on a mix of
+  expert and policy actions, so a slightly better early policy visits better
+  states and trains more easily. A single run is not a baseline, and any
+  BC or BC+PPO comparison needs several seeds.
+- The learned policy is evaluated against a **looser** soft-landing gate
+  (4.0 / 3.0 m/s, `SIM-RL07`) than the touchdown requirement (2.0 / 0.5 m/s).
+  Do not read the soft-landing rate as requirement compliance.
 
 The honest summary of the RL effort so far is that essentially every failure was
 infrastructure rather than algorithm — the action-to-thrust mapping, reward
