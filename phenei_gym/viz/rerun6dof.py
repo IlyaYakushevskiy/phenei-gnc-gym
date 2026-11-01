@@ -64,8 +64,14 @@ def log_descent6dof(
     app_id: str = "phenei_descent_6dof",
     stride: int | None = None,
     serve: bool = False,
+    own_recording: bool = True,
 ) -> Path:
-    rr.init(app_id, spawn=False)
+    # own_recording=False lets a caller (scripts/make_video.py) init the
+    # recording, add its own entities, and save once -- so the descent, the
+    # navigation telemetry and the Monte Carlo fan land in ONE .rrd instead of
+    # three that have to be opened side by side.
+    if own_recording:
+        rr.init(app_id, spawn=False)
     if serve:
         uri = rr.serve_grpc()
         rr.serve_web_viewer(connect_to=uri, open_browser=False)
@@ -162,5 +168,6 @@ def log_descent6dof(
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    rr.save(out)
+    if own_recording:
+        rr.save(out)
     return out

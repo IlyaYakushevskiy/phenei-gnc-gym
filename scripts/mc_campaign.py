@@ -222,6 +222,9 @@ def main() -> int:
                    help="multiplier on the engine performance dispersion")
     p.add_argument("--guidance", default="profile", choices=["profile", "range", "zemzev"])
     p.add_argument("--csv", default=None)
+    p.add_argument("--x0", type=float, default=None,
+                   help="km; skip the nominal-ignition solve and use this "
+                        "downrange start (it takes 5 full descents to find)")
     a = p.parse_args()
 
     if a.altitude is None:
@@ -231,8 +234,15 @@ def main() -> int:
                 guidance_mode=a.guidance, t_max=900.0)
 
     t0 = time.time()
-    print(f"solving the nominal ignition point ({a.guidance} guidance)...", flush=True)
-    x0, nominal = solve_nominal_ignition(base)
+    if a.x0 is not None:
+        x0 = a.x0 * 1e3
+        print(f"using x0 = {x0 / 1e3:.3f} km (given), flying the nominal once...",
+              flush=True)
+        nominal = Descent6DOF(Descent6DOFConfig(initial_downrange=x0, **base)).run()
+    else:
+        print(f"solving the nominal ignition point ({a.guidance} guidance)...",
+              flush=True)
+        x0, nominal = solve_nominal_ignition(base)
     print(f"  x0 = {x0 / 1e3:.3f} km  ({time.time() - t0:.0f} s)", flush=True)
 
     jobs = [(s, x0, base, a.inject_scale, a.perf_scale) for s in range(a.cases)]

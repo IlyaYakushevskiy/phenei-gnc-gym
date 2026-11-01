@@ -106,6 +106,39 @@ The filter is consistent: the error sits inside its reported 1σ in every
 altitude band, and the position σ grows monotonically through the
 measurement-free coast, which is the correct behaviour.
 
+### Candidate values for GNC-05 and GNC-06 (20 seeds, flat surface)
+
+| | position error (mean / 95th) | velocity error (mean / 95th) | attitude error |
+|---|---|---|---|
+| Config 1, no cant | 18.6 / 28.0 m | 0.23 / 0.42 m/s | 0.03° |
+| Config 1, 60° cant | 14.0 / 24.8 m | 0.20 / 0.34 m/s | 0.02° |
+| Config 2, no cant | 17.0 / 29.8 m | 0.01 / 0.01 m/s | 0.02° |
+| Config 2, 60° cant | 11.9 / 23.8 m | 0.00 / 0.01 m/s | 0.02° |
+
+`SIM-NV01`–`NV06`. Add these to the guidance miss in quadrature, not linearly.
+
+---
+
+## 3a. Config 1 vs Config 2 — the trade turns on one number, and it is mine
+
+**`TR-SIM-22`, `SIM-NV03`, `SIM-NV04`** — for Nicola (GNC).
+
+The simulation settles what the argument is *about*:
+
+- **Position accuracy is not a discriminator.** Config 1 and Config 2 give the
+  same touchdown position knowledge (18.6 m vs 17.0 m). The landing-accuracy
+  requirement `SIM-T01` does not distinguish them.
+- **Touchdown velocity is the whole argument.** `SIM-T03` allows 0.5 m/s
+  horizontal. Config 1's navigation error at the 95th percentile is **0.42 m/s
+  — 84 % of the entire budget, consumed before any control error.** Config 2
+  uses 2 %.
+
+But this rests entirely on `SIM-S34`, the per-measurement camera velocity
+accuracy, which **I invented** at 0.5 m/s. If the real figure is better than
+~0.3 m/s, Config 1 is comfortable. If it is worse, Config 1 cannot meet
+`SIM-T03` at all. **This is the single highest-value number you can give me**,
+and the recommendation stays conditional until it exists.
+
 ---
 
 ## 4. Hazard avoidance is infeasible where the ConOps puts it
