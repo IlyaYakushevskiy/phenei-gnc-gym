@@ -37,8 +37,8 @@ each other.
 | 3 RL | done to a defensible result: BC+PPO 76.1 % soft, does **not** beat classical |
 | 4 sensors + MEKF, closed-loop navigation | done |
 | 5 Monte Carlo campaign | done; produced the decisive negative result (`TR-SIM-23`) |
-| 6 engineering studies | noise-tolerance harness built (`scripts/noise_study.py`) |
-| 7 video | `scripts/make_video.py` builds the combined `.rrd` |
+| 6 engineering studies | engine-tolerance + sensor-noise curves done; thruster-count study not started |
+| 7 video | `studies/phenei_landing.rrd` built and verified |
 
 PyTorch 2.15.0+cu132 is installed and **CUDA works**: RTX 2080 SUPER, capability 7.5.
 
@@ -48,7 +48,7 @@ python3 -m venv .venv                                   # already created
 
 .venv/bin/python scripts/validate_mcr.py                # the gate: MUST be 15/15
 .venv/bin/python scripts/params_report.py               # provenance of params.csv
-.venv/bin/python -m pytest tests/ -q                    # 92 tests, ~2 min
+.venv/bin/python -m pytest tests/ -q                    # 94 tests, ~8 min
 .venv/bin/python -m pytest tests/test_descent.py -q -k touchdown   # single test
 
 .venv/bin/python scripts/run_descent.py                 # 3-DOF reference -> .rrd + .png

@@ -6,6 +6,73 @@ Parameters referenced as `SIM-xx` live in `design_docs/params.csv`; decisions as
 
 ---
 
+## 0. Status, 1 November 2026
+
+All seven phases have been executed at least once. `design_docs/FINDINGS.md`
+is the readable write-up; this file is the plan and the remaining work.
+
+| Phase | State |
+|---|---|
+| 0 scaffolding | done |
+| 1 3-DOF planar env | done — `validate_mcr.py` 15/15 |
+| 2 6-DOF inner loop | done — lands on all five touchdown criteria |
+| 2.5 presentable visuals | done except the `closeup/` entity |
+| 3 RL guidance | done, but the TASK needs re-specifying before the numbers mean anything (`TR-SIM-25`) |
+| 4 sensors + navigation | done — closed loop, filter consistent across a 5× noise range |
+| 5 MC campaign | done — produced the decisive negative result (`TR-SIM-23`, `TR-SIM-24`) |
+| 6 engineering studies | engine-tolerance and sensor-noise curves done; thruster-count study not done |
+| 7 video | `studies/phenei_landing.rrd` built and verified |
+
+94 tests pass (~8 min). 249 parameters, 222 of them `SIM-xx`, **96 awaiting
+human review**.
+
+### The one conclusion that drives everything else
+
+The open-loop guidance law cannot meet the landing-accuracy requirement, and
+three of the four candidate fixes are eliminated by measurement (`TR-SIM-24`).
+With a *perfect* engine the design passes 32/32 at 11.6 m, so nothing in the
+vehicle is broken — but CEP grows at 1595 m per 1 % of engine thrust
+tolerance, and meeting 50 m that way would need 0.03 % against the 1–3 % real
+engines deliver.
+
+**So the highest-value remaining work is implementing convex powered-descent
+guidance (`TR-SIM-11`) and re-running `mc_campaign.py` and `noise_study.py`
+against it.** Everything else is secondary to that.
+
+### Remaining work, in order
+
+1. **Convex guidance** (`TR-SIM-11`) — the only lever left. Then re-run the MC
+   campaign and the noise study; sensor noise *should* start to matter once
+   position is actually controlled.
+2. **Re-specify the RL task** (`SIM-RL19`) — lengthen the episode or reduce the
+   start offset until the classical expert reaches a high pass rate *in the
+   environment*, then re-run BC+PPO with several seeds. Until then no RL number
+   from this env is interpretable (`TR-SIM-25`).
+3. **Thruster count and placement study** (Phase 6) — not started. The pieces
+   exist: `ActuatorLayout.from_params` already parameterises the layout and
+   `reachable()` diagnoses it.
+4. **`closeup/` entity** in the viz (Phase 2.5 item 5).
+5. **Get the 96 unreviewed parameters reviewed.** `SIM-T02`–`T05` first — all
+   four touchdown limits are LLM assumptions and every pass rate in the project
+   is scored against them.
+
+### Methodological lessons worth not relearning
+
+- **Measure a reference policy inside an RL environment before interpreting any
+  learned result from it.** The expert existed as a cloning target and a test
+  fixture for most of Phase 3; running it end-to-end as a benchmark costs one
+  run and reframed the entire phase.
+- **One seed is not a result.** Two conclusions in this project were drawn from
+  single runs and both were wrong (`SIM-NV08` superseded by `SIM-NV10`, and the
+  claim that PPO fine-tuning improved monotonically).
+- **Instrument before hypothesising.** The zero-noise navigation failure took
+  three hypotheses; the per-sensor accept/reject counts settled it in one run.
+- **A filter may not claim more certainty than its model deserves**, and an
+  outlier gate must test absolute implausibility as well as statistical
+  surprise, or a collapsed covariance blinds it.
+
+---
+
 ## 1. Answers to the open questions
 
 ### 2D or 3D → **3D (6-DOF)**, with a 3-DOF scaffold used only to debug the RL loop
