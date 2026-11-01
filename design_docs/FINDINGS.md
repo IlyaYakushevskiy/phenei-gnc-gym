@@ -151,15 +151,37 @@ and the recommendation stays conditional until it exists.
 
 This is the decisive negative result of the project.
 
-| Dispersion applied | CEP |
-|---|---|
-| none (determinism check) | **11.6 m** |
-| engine performance only — 2 % thrust, 1 % Isp | **3251 m** |
-| engine + full injection dispersion | 2452–3251 m |
+**With a perfect engine the design passes 32 of 32 cases on all five
+touchdown criteria at 11.6 m** (`SIM-MC22`). Nothing in the vehicle, the
+actuator layout, the attitude stack or the touchdown limits is broken — they
+are mutually consistent and achievable. What fails is the open-loop guidance
+law's ability to *absorb* dispersion.
 
-The nominal case lands at 11.6 m meeting all five touchdown criteria. **A 2 %
-engine tolerance on its own costs 3.3 km of landing accuracy**, and adding the
-whole injection dispersion on top barely changes it.
+The engine-tolerance curve, with injection dispersion switched off entirely
+(`SIM-MC20`, 32 cases per point):
+
+| thrust tolerance (1σ) | CEP | R95 | all five criteria | tanks dry |
+|---|---|---|---|---|
+| 0 % | **11.6 m** | 11.6 m | **100 %** | 0 % |
+| 0.2 % | 321 m | 866 m | 6 % | 0 % |
+| 0.5 % | 794 m | 2159 m | 3 % | 3 % |
+| 1 % | 1579 m | 4321 m | 0 % | 13 % |
+| 2 % | 3176 m | 8747 m | 0 % | 19 % |
+| 4 % | 6459 m | 17517 m | 0 % | 31 % |
+
+The slope is **1595 m of CEP per 1 % of thrust tolerance** — measured at 1607,
+1587, 1579, 1588 and 1615 across a 20× range, so it is linear to about 1 %.
+
+**Meeting the 50 m requirement this way needs 0.03 % thrust tolerance (0.01 %
+at R95) against the 1–3 % a real pressure-fed engine delivers** (`SIM-MC21`).
+That is the decisive number: it is not that the engines need to be better, it
+is that no engine is this good, so the guidance law has to absorb the
+dispersion instead of integrating it.
+
+At the realistic 2 %, the tanks run dry in roughly one case in five
+(`SIM-MC23`) — a mission-loss rate, not a margin problem.
+
+Adding the whole injection dispersion on top of this barely changes anything.
 
 So the instinctive fix — tighten injection knowledge — buys nothing. The cause
 is that the altitude-priority guidance law tracks *velocity profiles* and never
