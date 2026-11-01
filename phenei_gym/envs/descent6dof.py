@@ -53,8 +53,12 @@ class Descent6DOFConfig:
                                              # landing site at the frame origin
     range_brake: float = 0.85                # fraction of available horizontal decel used by
                                              # the range-to-go profile
-    guidance_mode: str = "profile"           # "profile" | "range" | "zemzev" (targets
-                                             # the landing SITE, TR-SIM-11)
+    guidance_mode: str = "profile"           # "profile" | "range" | "zemzev" | "convex"
+                                             # (the last three target the landing SITE,
+                                             # TR-SIM-11)
+    replan_interval: float = None            # s; SIM-CVX02, convex mode only
+    cvx_gain_pos: float = None               # SIM-CVX03
+    cvx_gain_vel: float = None               # SIM-CVX06
 
     # --- Monte Carlo dispersions (Phase 5). All zero = the nominal case.
     #
@@ -105,6 +109,12 @@ class Descent6DOFConfig:
             self.mass = PARAMS.value("SIM-M03")
         if self.k_vz is None:
             self.k_vz = PARAMS.value("SIM-GD08")
+        if self.replan_interval is None:
+            self.replan_interval = PARAMS.value("SIM-CVX02")
+        if self.cvx_gain_pos is None:
+            self.cvx_gain_pos = PARAMS.value("SIM-CVX03")
+        if self.cvx_gain_vel is None:
+            self.cvx_gain_vel = PARAMS.value("SIM-CVX06")
 
 
 @dataclass
@@ -168,6 +178,19 @@ class Descent6DOF:
         self._ic = st
         self.nav = None
         self.suite = None
+        # Convex guidance state (TR-SIM-11). The solver is built lazily so the
+        # cvxpy import is not paid by runs that do not use it.
+        self._cvx = None
+        self._plan = None
+        self._plan_t0 = 0.0
+        self.cvx_solves = 0
+        # (t, altitude, mass, tf chosen, propellant the plan wants, phase,
+        #  angle between the commanded and the achieved thrust direction).
+        # Everything needed to see WHY a convex run spends more than it planned.
+        self.cvx_log = []
+        self.cvx_fallbacks = 0
+        self.cvx_phase = ""
+        self._cvx_handed_over = False
         if self.cfg.navigation:
             self._build_nav()
 
@@ -298,7 +321,7 @@ class Descent6DOF:
                         st["v_vertical"] + c.d_v_vertical])
         mass = c.mass + c.d_mass
         # start already pointing where guidance will want it
-        q0 = quat_pointing(self._thrust_direction(pos, vel, mass=mass)[0])
+        q0 = quat_pointing(self._thrust_direction(pos, vel, mass=mass, t=0.0)[0])
         return make_state(pos, vel, q0, np.zeros(3), mass)
 
     # ------------------------------------------------------------------
@@ -313,7 +336,65 @@ class Descent6DOF:
         return dict(alt=r - self.radius, up=up, v_up=v_up, v_h=v_h, h_hat=h_hat,
                     g_eff=self.veh.mu / (r * r) - v_h * v_h / r)
 
-    def _thrust_direction(self, pos, vel, mass):
+    def _convex_command(self, pos, vel, mass, t, t_min, t_max):
+        """Model-predictive convex guidance (TR-SIM-11, SIM-CVX01-07).
+
+        Re-solves the powered-descent SOCP every ``SIM-CVX02`` seconds from the
+        state the controller can see -- the navigation estimate, when
+        navigation is closed -- and tracks the plan in between with a gentle
+        critically-damped correction on the deviation from it.
+
+        The correction gains are small (``SIM-CVX03``/``SIM-CVX06``) and that
+        is the point: they act on the error against a *feasible* trajectory,
+        not on the raw distance to the site. TR-SIM-20's direct position
+        feedback had to generate the whole approach geometry from a position
+        error and demanded 27 m/s^2 against 5.7 available; here the geometry
+        comes from the planner and the feedback only has to absorb drift
+        accumulated since the last solve.
+        """
+        from phenei_gym.guidance.convex import ConvexDescentGuidance
+
+        if self._cvx is None:
+            # The gate state must be the one the terminal law expects, which is
+            # its own velocity profile at SIM-A12 -- not the touchdown rate.
+            self._cvx = ConvexDescentGuidance.from_params(
+                thrust_max=self.cfg.thrust_max, thrust_cap=self.cfg.thrust_cap,
+                v_gate=math.sqrt(2.0 * self.a_dec * self.h_terminal
+                                 + self.v_touchdown ** 2))
+
+        due = (self._plan is None
+               or (t - self._plan_t0) >= self.cfg.replan_interval)
+        if due:
+            if self._plan is None:
+                plan = self._cvx.solve(pos, vel, mass,
+                                       n_tf=int(PARAMS.value("SIM-CVX07")))
+            else:
+                # Narrow bracket around what is left of the current plan: the
+                # time of flight should not be free to drift at every replan,
+                # or the vehicle can stretch the burn to avoid ever committing.
+                rem = max(self._plan.tf - (t - self._plan_t0), 5.0)
+                plan = self._cvx.solve(pos, vel, mass, bracket=(0.85 * rem, 1.15 * rem),
+                                       n_tf=3)
+            if plan is not None:
+                self._plan, self._plan_t0 = plan, t
+                self.cvx_solves += 1
+                self.cvx_phase = plan.phase
+                self.cvx_log.append((t, self._local(pos, vel)["alt"], float(mass),
+                                     plan.tf, plan.propellant, plan.phase))
+            elif self._plan is None:
+                return None
+
+        r_p, v_p, u_p = self._plan.sample(t - self._plan_t0)
+        a_cmd = (u_p
+                 + self.cfg.cvx_gain_pos * (r_p - pos)
+                 + self.cfg.cvx_gain_vel * (v_p - vel))
+        n = float(np.linalg.norm(a_cmd))
+        if n < 1e-9:
+            return None
+        thrust = float(np.clip(mass * n, t_min, t_max))
+        return a_cmd / n, thrust
+
+    def _thrust_direction(self, pos, vel, mass, t: float = 0.0):
         """Guidance: returns (unit thrust direction in world, thrust magnitude)."""
         L = self._local(pos, vel)
         alt = L["alt"]
@@ -336,6 +417,19 @@ class Descent6DOF:
         if alt <= self.h_terminal:
             frac = self.cfg.n_engines_terminal / 4.0
             t_max, t_min = frac * t_max, self.throttle_min * frac * self.cfg.thrust_max
+
+        # Latched: once the terminal law has the vehicle it keeps it. Without
+        # the latch, altitude noise around the gate hands control back and
+        # forth between two laws with different ideas about the descent rate.
+        if alt <= self.h_terminal:
+            self._cvx_handed_over = True
+        if self.cfg.guidance_mode == "convex" and not self._cvx_handed_over:
+            cmd = self._convex_command(pos, vel, mass, t, t_min, t_max)
+            if cmd is not None:
+                return cmd
+            # Solver failure falls through to the profile law rather than
+            # coasting. Counted so a run that silently degraded is visible.
+            self.cvx_fallbacks += 1
 
         if self.cfg.guidance_mode == "range":
             # Range-to-go velocity profile: the horizontal analogue of the
@@ -441,7 +535,7 @@ class Descent6DOF:
             e = s if nav is None else self._nav_state_vector(nav, s)
 
             if k % n_gui == 0:
-                d_world, thrust_cmd = self._thrust_direction(e[I_POS], e[I_VEL], mass)
+                d_world, thrust_cmd = self._thrust_direction(e[I_POS], e[I_VEL], mass, t)
                 q_cmd = quat_pointing(d_world)
             if k % n_att == 0:
                 active = np.ones(self.layout.n)

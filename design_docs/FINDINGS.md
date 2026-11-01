@@ -37,7 +37,7 @@ duration implies ≈55 km, and 6 kN implies ≈62 km. Only §5.3.5's 39 km disag
 and that figure is marked TBC.
 
 The simulation uses **60 km** (`SIM-A19`) and lands inside the touchdown box
-using 368 kg of propellant in 222 s.
+using 378.8 kg of propellant in 235 s (`SIM-GD17`).
 
 ---
 
@@ -196,7 +196,7 @@ optimisation, which is what the convex formulation does.
 Two secondary findings from the same campaign:
 
 - **There is effectively no propellant margin** (`SIM-MC12`). The nominal burn
-  uses 368 kg of the 380 kg loaded, and 11 of 24 dispersed cases ran the tanks
+  uses 378.8 kg of the 380 kg loaded — **1.2 kg of margin** — and 11 of 24 dispersed cases ran the tanks
   dry before touchdown. Arguably more urgent than the accuracy problem.
 - Relaxing `SIM-T01` to the 100 m reading does not help at this error
   magnitude. Recorded so nobody proposes it as a shortcut.

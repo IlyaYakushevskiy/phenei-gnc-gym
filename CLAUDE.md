@@ -164,7 +164,7 @@ approach state can be derived from it rather than guessed:
 | Flight-path angle below local horizontal | 22.0° | 21.6° |
 | Descent rate / horizontal speed | 557 / 1376 m/s | 538 / 1359 m/s |
 | Thrust required | **9.36 kN** — infeasible | 6 kN |
-| Vehicle mass | — | 880 kg (dry 500 + 380 propellant, 368 consumed) |
+| Vehicle mass | — | 880 kg (dry 500 + 380 propellant; 368 consumed in 3-DOF, **378.8 in 6-DOF**) |
 
 Orbit eccentricity 0.419, semi-major axis 1477.6 km. **The 39 km figure is infeasible** — see the
 conflicts below.
@@ -241,7 +241,7 @@ Flag these rather than silently resolving them:
   1/thrust: **138/96/75/62 km for 3/4/5/6 kN** (`SIM-A21`). Two of the MCR's own numbers already
   agree with this — the 202 s burn duration implies ≈55 km, and 6 kN implies ≈62 km. Only §5.3.5's
   39 km disagrees, and it is marked TBC. **Simulated**: lands inside the touchdown box from 60 km
-  using 368 kg in 222 s.
+  using 378.8 kg in 235 s (`SIM-GD17`; the 368 kg often quoted is the 3-DOF figure).
 - **Sensor pointing vs flown attitude** (`SIM-A16`, `TR-SIM-14`). Simulated, not estimated: the
   vehicle holds **64–68° from local vertical for 174 s of the 222 s burn** (78 %), spiking to 86°
   at ignition where centrifugal relief makes vertical thrust nearly unnecessary, and drops below
@@ -264,8 +264,10 @@ Flag these rather than silently resolving them:
   this** — `TR-SIM-20` records two position-feedback attempts that both fail for the same
   structural reason (with the timeline fixed by a vertical profile, range and velocity are not
   independently controllable).
-- **There is effectively no propellant margin** (`SIM-MC12`). The nominal burn uses 368 kg of the
-  380 kg loaded, and 11 of 24 dispersed cases ran the tanks dry before touchdown.
+- **There is effectively no propellant margin** (`SIM-MC12`, `SIM-GD17`). The nominal 6-DOF burn
+  uses **378.8 kg of the 380 kg loaded — 1.2 kg of margin** — and 11 of 24 dispersed cases ran the
+  tanks dry before touchdown. Do not quote the 368 kg 3-DOF figure here: it hides 11 kg of
+  attitude-slew cost and makes the margin look like 3 % when it is 0.3 %.
 - **Navigation error is amplified, not attenuated.** With navigation closed, 22 m of final
   position error produced a 72.6 m miss, because the position-open-loop guidance never corrects
   the steering error the estimate induced. Do not add nav error to guidance miss in quadrature
