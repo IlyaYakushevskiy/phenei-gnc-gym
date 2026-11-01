@@ -191,7 +191,7 @@ results, and use several hundred cases before comparing close configurations.
 
 | Lever | Verdict | Evidence |
 |---|---|---|
-| Better sensors | **No effect** | Miss shows no trend with sensor noise: 39/239/119/310/88 m from k=0 to k=5. A 5× degraded suite landed *closer* than a near-perfect one (`SIM-NV08`) |
+| Better sensors | **Helps, but cannot close it** | Even a *perfect* suite leaves a 168 m mean miss against a 50 m requirement. Degrading it 5× roughly doubles the miss (168 → 441 m) and drops the all-five rate 30 % → 0 % (`SIM-NV10`, 10 seeds/level) |
 | Tighter engine tolerance | **Infeasible** | CEP = 1600 m × (thrust tolerance %), so 50 m needs **0.03 %** against the 1–3 % real engines deliver (`SIM-MC19`) |
 | Tighter injection accuracy | **No effect** | Scaling injection dispersion 0 → full moves CEP less than the sampling uncertainty (`SIM-MC17`) |
 | Closed-loop position guidance | **The only lever left** | By elimination; `TR-SIM-11` |
@@ -210,6 +210,27 @@ correctable instead of integrated.
 the tanks dry at *every* injection scale including zero, mean usage 376–378 kg
 of 380 kg loaded (`SIM-MC18`). Two independent requirement failures, one
 cause.
+
+### Sensor-noise tolerance (closed loop, 10 seeds per level)
+
+| noise × | nav position error | landing miss | all five criteria |
+|---|---|---|---|
+| 0 (floor) | 0.2 m | 167.9 m | 30 % |
+| 0.5 | 7.4 m | 245.2 m | 0 % |
+| 1.0 (spec) | 12.1 m | 234.5 m | 0 % |
+| 2.0 | 32.3 m | 265.5 m | 10 % |
+| 5.0 | 68.2 m | 441.1 m | 0 % |
+
+Navigation error is cleanly monotonic across the 5× range and the filter stays
+consistent throughout (`SIM-NV12`) — that is the Phase 4 acceptance, and it is
+solid. The *miss* is only weakly coupled to it, which is the guidance-law
+problem again.
+
+**Correction worth flagging:** an earlier single-seed version of this sweep
+showed no trend at all, and I recorded that sensor noise "does not matter."
+With 10 seeds it does matter — just not enough. Single-seed conclusions from
+this simulation have been wrong twice today; the miss distribution is wide
+enough that nothing here should be concluded from one run.
 
 ---
 
