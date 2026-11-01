@@ -186,6 +186,41 @@ def log_fan(tracks, landings, touchdowns) -> None:
 
 
 # ----------------------------------------------------------------------
+def _deliverable_blueprint():
+    """Layout for the deliverable recording.
+
+    Four questions, four panes: where did it fly, what did it look like from
+    alongside, what did navigation know and how well did it know it was wrong,
+    and which sensors were actually available when. Rerun's automatic layout
+    puts all of that in one 3D view and one shared plot axis, which is how the
+    first version of this recording managed to contain every result and
+    communicate none of them.
+    """
+    import rerun.blueprint as rrb
+
+    return rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.Spatial3DView(
+                name="Descent + Monte Carlo fan", origin="/",
+                contents=["world/**", "marker/**", "vehicle/**", "chase_cam/**"]),
+            rrb.Vertical(
+                rrb.Spatial2DView(name="Chase camera", origin="chase_cam"),
+                rrb.TimeSeriesView(
+                    name="Navigation error vs the filter's own sigma", origin="/",
+                    contents=["nav/pos_error_m", "nav/pos_sigma_m",
+                              "nav/vel_error_ms", "nav/vel_sigma_ms"]),
+                rrb.TimeSeriesView(name="Sensor availability", origin="sensors"),
+                rrb.TimeSeriesView(
+                    name="Flight state", origin="/",
+                    contents=["telemetry/altitude_m", "telemetry/v_vertical",
+                              "telemetry/v_horizontal", "telemetry/tilt_deg"]),
+            ),
+            column_shares=[2.0, 1.0],
+        ),
+        collapse_panels=False,
+    )
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -232,6 +267,7 @@ def main() -> int:
 
     print("building the recording...", flush=True)
     rr.init("phenei_landing", spawn=False)
+    rr.send_blueprint(_deliverable_blueprint())
     rnav.log_static_nav_setup(SENSORS)
     log_descent6dof(nominal, terrain, a.out, own_recording=False)
     counts = log_nav_track(nominal, a.cant, a.config, terrain)
