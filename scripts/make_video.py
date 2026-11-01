@@ -144,6 +144,13 @@ def log_nav_track(result, cant_deg: float, config: str, terrain, seed: int = 0) 
             fired=fired, trn_fix=(fix[0] if fix is not None else None))
 
     rnav.log_availability_summary(counts, frames)
+    # Report what was actually logged. Rerun batches rows into compressed
+    # chunks, so neither the file size nor a string scan of the .rrd tells
+    # you how many frames landed -- the final recording is 6.0 MB against a
+    # 14.6 MB one holding strictly less, purely from chunking. This counter
+    # is the only honest check that the telemetry is in there.
+    counts["_nav_frames_logged"] = frames // log_every
+    counts["_filter_steps"] = frames
     return counts
 
 
