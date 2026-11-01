@@ -37,13 +37,26 @@ from phenei_gym.envs.descent6dof import Descent6DOF, Descent6DOFConfig  # noqa: 
 from phenei_gym.nav import MEKF, MEKFConfig, NavState  # noqa: E402
 from phenei_gym.params import PARAMS  # noqa: E402
 from phenei_gym.sensors import SensorSuite, Truth  # noqa: E402
+from phenei_gym.viz import rerun_nav as rnav  # noqa: E402
 
 RADIUS = PARAMS.value("SIM-E03") * 1e3
 MU = PARAMS.value("SIM-E02")
 
 
+_TRUTH_CACHE: dict = {}
+
+
 def truth_trajectory(cfg: Descent6DOFConfig):
-    """Run the reference descent and return time, state and inertial accel."""
+    """Run the reference descent and return time, state and inertial accel.
+
+    Cached: the descent is deterministic and identical for every Monte Carlo
+    seed -- only the sensor noise is redrawn -- so re-flying 89000 RK4 steps
+    per seed was 20x wasted work on a 20-seed sweep.
+    """
+    key = (cfg.thrust_max, cfg.ignition_altitude, cfg.mass, cfg.dt,
+           cfg.guidance_mode, cfg.initial_downrange)
+    if key in _TRUTH_CACHE:
+        return _TRUTH_CACHE[key]
     res = Descent6DOF(cfg).run()
     t, x = res.t, res.state
     # Inertial acceleration by central difference of the stored velocity.
@@ -53,10 +66,11 @@ def truth_trajectory(cfg: Descent6DOFConfig):
     a = np.zeros_like(v)
     a[1:-1] = (v[2:] - v[:-2]) / (t[2:] - t[:-2])[:, None]
     a[0], a[-1] = a[1], a[-2]
+    _TRUTH_CACHE[key] = (res, t, x, a)
     return res, t, x, a
 
 
-def run_case(seed: int, cant_deg: float, config: str, terrain, args):
+def run_case(seed: int, cant_deg: float, config: str, terrain, args, rrd: bool = False):
     rng = np.random.default_rng(seed)
     cfg = Descent6DOFConfig()
     res, t, x, a = truth_trajectory(cfg)
@@ -81,6 +95,10 @@ def run_case(seed: int, cant_deg: float, config: str, terrain, args):
 
     n = len(t)
     stride = max(1, int(round(args.imu_dt / (t[1] - t[0]))))
+    # Log at ~10 Hz rather than every filter step: a 223 s burn at 200 Hz is
+    # 45000 frames, which makes an unscrubbable recording for no extra
+    # information. The sensors themselves run at 1-10 Hz.
+    rrd_stride = max(1, int(round(0.1 / args.imu_dt)))
     log_t, log_perr, log_verr, log_aerr = [], [], [], []
     log_psig, log_vsig, log_asig, log_alt = [], [], [], []
     avail_count = {"star": 0, "trn": 0, "DLEM30": 0, "DLEM17": 0,
@@ -101,27 +119,43 @@ def run_case(seed: int, cant_deg: float, config: str, terrain, args):
         omega_m, accel_m = suite.imu.sample(tr, dt, rng)
         filt.propagate(omega_m, accel_m, dt)
 
+        fired = {k: False for k in avail_count}
         if (q := suite.star.sample(tr, rng)) is not None:
             if filt.update_star(q, suite.star.covariance):
                 avail_count["star"] += 1
-        if (fix := suite.trn.sample(tr, rng)) is not None:
+                fired["star"] = True
+        fix = suite.trn.sample(tr, rng)
+        if fix is not None:
             if filt.update_trn(fix[0], fix[1]):
                 avail_count["trn"] += 1
+                fired["trn"] = True
         for alt in suite.altimeters:
             if (r := alt.sample(tr, rng, terrain)) is not None:
                 if filt.update_altimeter(r, alt.boresight_body, alt.sigma_at(r)):
                     avail_count[alt.name] += 1
+                    fired[alt.name] = True
                     if first_alt_fix is None:
                         first_alt_fix = (float(t[i]), tr.altitude, alt.name)
         if (vm := suite.velocity.sample(tr, rng)) is not None:
             horiz = config != "2"
             if filt.update_velocity(vm[0], vm[1], horizontal_only=horiz):
                 avail_count["velocity"] += 1
+                fired["velocity"] = True
 
         samples += 1
         dq = quat_mul(s[I_QUAT], quat_conj(filt.x.quat))
         if dq[3] < 0:
             dq = -dq
+        if rrd and i % rrd_stride == 0:
+            rnav.log_nav_frame(
+                t=float(t[i]), truth_pos=s[I_POS], est_pos=filt.x.pos,
+                pos_err=float(np.linalg.norm(filt.x.pos - s[I_POS])),
+                pos_sigma=filt.rss("pos"),
+                vel_err=float(np.linalg.norm(filt.x.vel - s[I_VEL])),
+                vel_sigma=filt.rss("vel"),
+                att_err_deg=math.degrees(2.0 * np.linalg.norm(dq[:3])),
+                att_sigma_deg=math.degrees(filt.rss("att")),
+                fired=fired, trn_fix=(fix[0] if fix is not None else None))
         log_t.append(float(t[i]))
         log_perr.append(float(np.linalg.norm(filt.x.pos - s[I_POS])))
         log_verr.append(float(np.linalg.norm(filt.x.vel - s[I_VEL])))
@@ -155,6 +189,8 @@ def main() -> int:
     p.add_argument("--terrain", action="store_true",
                    help="cast altimeter beams against real terrain")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--rrd", default=None,
+                   help="write a Rerun recording of the navigation chain")
     a = p.parse_args()
 
     terrain = None
@@ -162,14 +198,28 @@ def main() -> int:
         from phenei_gym import terrain as terrain_mod
         terrain = terrain_mod.generate(np.random.default_rng(7))
 
+    if a.rrd:
+        import rerun as rr
+        rr.init("phenei_nav", spawn=False)
+        rnav.log_static_nav_setup(["star", "trn", "DLEM30", "DLEM17",
+                                   "RADAR", "velocity"])
+
     finals = []
     for seed in range(a.seeds):
-        out = run_case(seed, a.cant, a.config, terrain, a)
+        out = run_case(seed, a.cant, a.config, terrain, a,
+                       rrd=bool(a.rrd) and seed == 0)
         finals.append(out)
         if a.seeds == 1 and not a.quiet:
             report(out, a)
     if a.seeds > 1:
         summarise(finals, a)
+    if a.rrd:
+        import rerun as rr
+        rnav.log_availability_summary(finals[0]["avail"], finals[0]["samples"])
+        out_path = Path(a.rrd)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        rr.save(str(out_path))
+        print(f"\nwrote {out_path.resolve()}")
     return 0
 
 

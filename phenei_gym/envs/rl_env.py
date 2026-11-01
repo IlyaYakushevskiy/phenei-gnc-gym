@@ -44,6 +44,22 @@ class LandingTaskConfig:
     corridor_accel: float = 4.0          # m/s^2, the descent-rate corridor
     corridor_weight: float = 0.25
     mass0: float = 620.0                 # dry 500 + 120 kg for the last phase
+    # Shaping weights. Exposed because the first value of w_horiz (0.02/m)
+    # was too weak to matter: over the 250 m start offset it is worth 5
+    # reward points against 12 for altitude and 12 for speed, and across
+    # studies/bc_v2 the mean miss sat at 95-100 m for every PPO iteration
+    # from 1 to 125 while the soft-landing rate moved by 20 points. The
+    # policy was being paid to land softly and barely paid to land ON the
+    # site. Raising it to 0.15 makes closing the last 100 m worth 15 points.
+    w_horiz: float = 0.15
+    w_alt: float = 0.03
+    w_speed: float = 0.30
+    w_tilt: float = 5.0
+    # Scale of the terminal accuracy bonus, m. Set to the actual landing
+    # accuracy requirement (SIM-T01 = 50 m) rather than 25 m, so the bonus
+    # is still worth half its maximum at the requirement boundary instead
+    # of a third.
+    accuracy_scale: float = 50.0
 
 
 class LandingTask:
@@ -105,7 +121,9 @@ class LandingTask:
         # Shaping gradient has to be strong enough that descending and
         # closing on the site beats loitering. With weak shaping the policy
         # discovers that never touching down avoids the crash penalty.
-        return -(0.02 * horiz + 0.03 * alt + 0.30 * speed + 5.0 * s.tilt())
+        c = self.cfg
+        return -(c.w_horiz * horiz + c.w_alt * alt
+                 + c.w_speed * speed + c.w_tilt * s.tilt())
 
     def _observe(self) -> torch.Tensor:
         s = self.sim
@@ -207,7 +225,12 @@ class LandingTask:
         reward = reward - out_of_fuel.to(self.dtype) * 80.0
         reward = reward - diverged.to(self.dtype) * 80.0
         reward = reward - timeout.to(self.dtype) * 80.0
-        reward = reward + soft.to(self.dtype) * (80.0 / (1.0 + horiz / 25.0))
+        # Accuracy bonus on EVERY landing, not just soft ones. Paying it only
+        # for soft landings means a policy that has not yet learned the flare
+        # gets no gradient toward the site at all, and the two skills have to
+        # be discovered simultaneously.
+        reward = reward + landed.to(self.dtype) * (
+            80.0 / (1.0 + horiz / c.accuracy_scale))
 
         info = {"landed": landed, "good": good, "soft": soft, "diverged": diverged,
                 "out_of_fuel": out_of_fuel, "timeout": timeout,

@@ -48,6 +48,8 @@ def main() -> int:
     ap.add_argument("--bc-iters", type=int, default=400)
     ap.add_argument("--ppo-iters", type=int, default=1500)
     ap.add_argument("--warmup", type=int, default=60)
+    ap.add_argument("--anchor", type=float, default=0.05,
+                    help="weight on ||mu - mu_BC||^2; 0 disables the BC trust region")
     ap.add_argument("--out", default="studies/bc")
     a = ap.parse_args()
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
@@ -115,13 +117,20 @@ def main() -> int:
     pol.log_std.requires_grad_(True)
 
     # ---- phase 2: PPO fine-tune
-    print("=== PPO fine-tune ===", flush=True)
+    # A frozen copy of the cloned policy, kept as a trust-region anchor.
+    # PPO's ratio clip bounds each step against the PREVIOUS iteration, so a
+    # long run of individually-legal steps can still walk far from the clone.
+    import copy
+    anchor = copy.deepcopy(pol).eval()
+    for p_ in anchor.parameters():
+        p_.requires_grad_(False)
+    print(f"=== PPO fine-tune (anchor coef {a.anchor}) ===", flush=True)
     fh = (out / "progress.csv").open("w", newline=""); wr = csv.writer(fh)
     wr.writerow(["iter", "minutes", "land_rate", "good_rate", "soft_rate", "miss", "vup", "vh"])
     obs = task.observe(); best = -1.0
     for it in range(1, a.ppo_iters + 1):
         obs, batch, st = algo.collect(task, obs)
-        algo.update(batch)
+        algo.update(batch, anchor=anchor, anchor_coef=a.anchor)
         if it % 25 == 0 or it == 1:
             tot, mi, vu, vh = evaluate(ev, pol)
             L = max(tot["landed"], 1)

@@ -1,0 +1,5 @@
+
+=== 20 seeds, Config 2, cant 60 deg ===
+  touchdown position  error  mean    11.92  95th    23.82  max    28.60  m
+  touchdown velocity  error  mean     0.00  95th     0.01  max     0.01  m/s
+  touchdown attitude  error  mean     0.02  95th     0.04  max     0.05  deg

@@ -92,7 +92,18 @@ class PPO:
             adv[t] = gae
         return obs, (O, A, LP, V, adv, adv + V), stats
 
-    def update(self, batch):
+    def update(self, batch, anchor=None, anchor_coef: float = 0.0):
+        """One PPO update.
+
+        ``anchor`` is an optional frozen reference policy (the behaviour-cloned
+        one).  Adding ``anchor_coef * ||mu - mu_anchor||^2`` to the loss keeps
+        the fine-tune inside a trust region around the cloned policy, which
+        PPO's own ratio clip does NOT do: the clip bounds each step relative
+        to the policy as it was one iteration ago, so a slow drift of many
+        small in-clip steps walks arbitrarily far from the start. That is
+        exactly the failure seen in studies/bc_v2: 76.1% soft at iteration 25
+        decaying to 56.6% by 100 with every single step inside the clip.
+        """
         c = self.cfg
         O, A, LP, V, adv, ret = (x.flatten(0, 1) for x in batch)
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
@@ -110,6 +121,12 @@ class PPO:
                 pl = -torch.min(l1, l2).mean()
                 vl = (v - ret[j]).pow(2).mean()
                 loss = pl + c.value_coef * vl - c.entropy_coef * ent.mean()
+                al = torch.zeros((), device=self.device)
+                if anchor is not None and anchor_coef > 0.0:
+                    with torch.no_grad():
+                        mu_a = anchor.pi(O[j])
+                    al = (self.p.pi(O[j]) - mu_a).pow(2).sum(-1).mean()
+                    loss = loss + anchor_coef * al
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.p.parameters(), c.max_grad_norm)
@@ -118,7 +135,8 @@ class PPO:
                     last = {"policy_loss": float(pl), "value_loss": float(vl),
                             "entropy": float(ent.mean()),
                             "kl": float((LP[j] - lp).mean()),
-                            "std": float(self.p.log_std.exp().mean())}
+                            "std": float(self.p.log_std.exp().mean()),
+                            "anchor": float(al)}
             if last.get("kl", 0.0) > c.target_kl:
                 break
         return last

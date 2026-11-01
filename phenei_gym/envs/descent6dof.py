@@ -52,6 +52,29 @@ class Descent6DOFConfig:
     guidance_mode: str = "profile"           # "profile" | "range" | "zemzev" (targets
                                              # the landing SITE, TR-SIM-11)
 
+    # --- Monte Carlo dispersions (Phase 5). All zero = the nominal case.
+    #
+    # These perturb the state the vehicle ACTUALLY starts in while leaving
+    # the guidance law's internal reference (``self._ic``, from the analytic
+    # arc) untouched. That asymmetry is deliberate and is the point of the
+    # campaign: the real vehicle is handed over from the ballistic hop with
+    # an injection error it does not know about, and the guidance has to
+    # absorb it. Perturbing both together would just translate the problem
+    # and measure nothing.
+    #
+    # TR-08 (injection dispersion) has not been run by the mission-analysis
+    # team, so SIM-A15 is unknown. These are parameterised rather than
+    # guessed at a single value, and the campaign reports sensitivity to
+    # them -- see PLAN section 3.
+    d_altitude: float = 0.0                  # m, additive
+    d_v_horizontal: float = 0.0              # m/s, additive
+    d_v_vertical: float = 0.0                # m/s, additive
+    d_crossrange: float = 0.0                # m, additive (out of the hop plane)
+    d_v_crossrange: float = 0.0              # m/s, additive
+    d_mass: float = 0.0                      # kg, additive
+    thrust_scale: float = 1.0                # multiplicative on delivered thrust
+    isp_scale: float = 1.0                   # multiplicative on Isp
+
     def __post_init__(self):
         if self.ignition_altitude is None:
             self.ignition_altitude = PARAMS.value("SIM-A19") * 1e3
@@ -123,13 +146,18 @@ class Descent6DOF:
         return self._I_ref * (mass / self._m_ref)
 
     def initial_state(self) -> np.ndarray:
-        st = self._ic
+        st, c = self._ic, self.cfg
         r0 = st["radius"]
-        pos = np.array([self.cfg.initial_downrange, 0.0, r0 - self.radius])
-        vel = np.array([st["v_horizontal"], 0.0, st["v_vertical"]])
+        pos = np.array([c.initial_downrange,
+                        c.d_crossrange,
+                        r0 - self.radius + c.d_altitude])
+        vel = np.array([st["v_horizontal"] + c.d_v_horizontal,
+                        c.d_v_crossrange,
+                        st["v_vertical"] + c.d_v_vertical])
+        mass = c.mass + c.d_mass
         # start already pointing where guidance will want it
-        q0 = quat_pointing(self._thrust_direction(pos, vel, mass=self.cfg.mass)[0])
-        return make_state(pos, vel, q0, np.zeros(3), self.cfg.mass)
+        q0 = quat_pointing(self._thrust_direction(pos, vel, mass=mass)[0])
+        return make_state(pos, vel, q0, np.zeros(3), mass)
 
     # ------------------------------------------------------------------
     def _local(self, pos, vel):
@@ -266,8 +294,14 @@ class Descent6DOF:
                     u = np.zeros(self.layout.n)
 
             w = self.layout.wrench_of(u)
-            force_body = np.array([0.0, 0.0, w[0]])
-            s = rk4_step(s, force_body, w[1:], self.layout.mass_flow(u),
+            # Delivered thrust and Isp are scaled, not the commanded throttle:
+            # the controller still believes it is getting what it asked for, so
+            # a thrust shortfall shows up as a tracking error the loop has to
+            # absorb, which is what a real engine-performance dispersion does.
+            force_body = np.array([0.0, 0.0, w[0] * cfg.thrust_scale])
+            torque = w[1:] * cfg.thrust_scale
+            mdot = self.layout.mass_flow(u) * cfg.thrust_scale / cfg.isp_scale
+            s = rk4_step(s, force_body, torque, mdot,
                          self.inertia(mass), self.veh.mu, self.radius, dt)
             t += dt
 
