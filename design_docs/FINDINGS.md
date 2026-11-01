@@ -321,7 +321,11 @@ Interference risk.
 
 ## 7. What I made up and you need to replace
 
+**96 of the 222 simulation parameters (42 %) are my own assumptions or TBD.**
+`scripts/params_report.py` prints the breakdown;
 `grep 'Assumption (LLM)' design_docs/params.csv` is the authoritative list.
+Read the conclusions in that light: they are as good as these inputs.
+
 The ones that actually change conclusions:
 
 | Row | What | Why it matters |
@@ -331,7 +335,9 @@ The ones that actually change conclusions:
 | `SIM-S03`, `S04`, `S06` | STIM300 noise figures | Whole navigation budget. Check the Safran datasheet. |
 | `SIM-S43` | TRN max usable incidence (70°) | The vehicle flies at 58–68°, i.e. right on this threshold |
 | `SIM-MC01`–`MC08` | Injection and engine dispersions | TR-08 has not been run, so `SIM-A15` is unknown and the Monte Carlo sweeps a scale factor instead of claiming an answer |
-| `SIM-T02`–`T05` | Touchdown limits | Everything is scored against these |
+| `SIM-MC07` | **Engine thrust tolerance (2 %)** | The whole accuracy conclusion is a *curve* against this, so the conclusion survives any value — but the headline numbers assume 2 %. Mattia's acceptance tolerances replace it directly |
+| `SIM-T02`–`T05` | Touchdown limits | **Everything is scored against these, and all four are mine.** If the real limits are looser the pass rates change throughout. The highest-leverage single review item in the file |
+| `SIM-RL19` | RL task initial conditions | Marked `NEEDS REVISION` — the task ceiling makes the RL numbers uninterpretable (`TR-SIM-25`) |
 
 **Document conflicts flagged, not silently resolved:**
 
