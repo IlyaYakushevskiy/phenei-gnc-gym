@@ -44,13 +44,42 @@ I_DTH, I_DV, I_DP, I_DBG, I_DBA = (slice(0, 3), slice(3, 6), slice(6, 9),
                                    slice(9, 12), slice(12, 15))
 NX = 15
 
-#: Smallest measurement variance the filter will accept. Guards the
-#: zero-noise diagnostic case (``nav_noise_scale = 0``) and any sensor model
-#: that reports an implausibly confident fix.
-R_FLOOR = 1e-9
+#: Smallest measurement variance the filter will accept, for numerical
+#: safety only. It is NOT what keeps the filter honest -- see the Q floors.
+R_FLOOR = 1e-12
 
-#: Smallest process-noise density, same rationale.
-Q_FLOOR = 1e-12
+# ----------------------------------------------------------------------
+# Process-noise floors representing THIS FILTER'S OWN MODEL ERROR.
+#
+# These are not numerical fudge factors; they are the price of the two
+# approximations documented in the module docstring, and without them the
+# filter is provably broken rather than merely approximate:
+#
+#   with Q ~ 0 and a near-perfect measurement, P collapses to ~0. The
+#   chi-square gate then rejects ANY subsequent measurement that disagrees by
+#   even a nanometre -- and real measurements always disagree a little,
+#   because the model error below is real. The filter goes blind while still
+#   reporting a tiny covariance. Observed directly: after one exact position
+#   fix, a fix 1 mm away was rejected as an outlier.
+#
+# A Kalman filter may not claim more certainty than its model deserves.
+#
+#: Unmodelled acceleration from the neglected gravity gradient. dg/dr =
+#: 2*mu/r^3 = 1.87e-6 s^-2 at the lunar surface, so a 100 m position error
+#: produces ~1.9e-4 m/s^2 of acceleration the filter does not model.
+Q_ACCEL_MODEL = 2.0e-4          # m/s^2 / sqrt(s)
+
+#: Attitude propagation error from the first-order state transition and the
+#: small-angle quaternion increment.
+Q_GYRO_MODEL = 1.0e-7           # rad/s / sqrt(s)
+
+#: Keeps the position block from going exactly singular; position is driven
+#: by velocity, so it needs no physical term of its own.
+Q_POS_MODEL = 1.0e-6            # m / sqrt(s)
+
+#: Bias states must keep a little freedom or they lock at their initial
+#: value and never become observable again.
+Q_BIAS_FLOOR = 1.0e-9
 
 
 def skew(v: np.ndarray) -> np.ndarray:
@@ -160,13 +189,15 @@ class MEKF:
         F[I_DP, I_DV] = np.eye(3)
         Phi = np.eye(NX) + F * dt + 0.5 * (F @ F) * dt * dt
 
-        # Floored for the same reason as R: a Q of exactly zero lets P
-        # collapse to singular, after which no measurement can move the state.
-        Q = np.eye(NX) * Q_FLOOR * dt
-        Q[I_DTH, I_DTH] = np.eye(3) * (c.arw ** 2 * dt + Q_FLOOR * dt)
-        Q[I_DV, I_DV] = np.eye(3) * (c.vrw ** 2 * dt + Q_FLOOR * dt)
-        Q[I_DBG, I_DBG] = np.eye(3) * (c.rrw_gyro ** 2 * dt + Q_FLOOR * dt)
-        Q[I_DBA, I_DBA] = np.eye(3) * (c.rrw_accel ** 2 * dt + Q_FLOOR * dt)
+        # Sensor noise PLUS the filter's own model error (see the Q_*_MODEL
+        # constants). The model-error terms dominate when the sensors are
+        # artificially quiet, which is exactly when they are needed.
+        Q = np.zeros((NX, NX))
+        Q[I_DTH, I_DTH] = np.eye(3) * (c.arw ** 2 + Q_GYRO_MODEL ** 2) * dt
+        Q[I_DV, I_DV] = np.eye(3) * (c.vrw ** 2 + Q_ACCEL_MODEL ** 2) * dt
+        Q[I_DP, I_DP] = np.eye(3) * Q_POS_MODEL ** 2 * dt
+        Q[I_DBG, I_DBG] = np.eye(3) * (c.rrw_gyro ** 2 + Q_BIAS_FLOOR ** 2) * dt
+        Q[I_DBA, I_DBA] = np.eye(3) * (c.rrw_accel ** 2 + Q_BIAS_FLOOR ** 2) * dt
         self.P = Phi @ self.P @ Phi.T + Q
         self.P = 0.5 * (self.P + self.P.T)
 
@@ -175,13 +206,9 @@ class MEKF:
                 tag: str) -> bool:
         """Joseph-form update with a Mahalanobis gate. True if accepted.
 
-        ``R`` is floored at ``R_FLOOR``. A real sensor always has some noise,
-        and a filter handed R = 0 is degenerate: S = H P H' + R goes singular,
-        every update is rejected, and the filter silently falls back to pure
-        dead reckoning while still reporting a shrinking covariance. That is
-        exactly what a zero-noise diagnostic run did -- it never corrected its
-        initial handover error and burned the tanks dry, which looked like a
-        guidance failure and was not.
+        ``R`` is floored at ``R_FLOOR`` for numerical safety. What actually
+        keeps the gate from blinding the filter is the model-error floor on
+        ``Q`` -- see the ``Q_*_MODEL`` constants.
         """
         R = R + np.eye(len(residual)) * R_FLOOR
         S = H @ self.P @ H.T + R

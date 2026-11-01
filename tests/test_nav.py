@@ -323,9 +323,18 @@ def test_closed_loop_navigation_still_lands():
     assert res.nav_error[-1, 1] < 150.0
 
 
-def test_zero_noise_navigation_tracks_truth():
-    """With nav_noise_scale = 0 the filter should converge essentially onto
-    truth, so the closed loop must reproduce the truth-fed trajectory."""
+def test_near_zero_noise_navigation_tracks_truth():
+    """At the noise floor the filter should converge essentially onto truth,
+    so the closed loop must reproduce the truth-fed trajectory.
+
+    This started as a nav_noise_scale = 0 test and failed -- the vehicle
+    exhausted its propellant. The cause was NOT guidance: with R = 0 the
+    covariance collapses to zero on every accepted update, so the gate
+    rejects the next measurement however good it is. The filter went blind
+    while reporting near-perfect confidence. A zero-noise sensor is an
+    invalid configuration rather than a limiting case, and the dial is now
+    clamped at NAV_NOISE_FLOOR.
+    """
     from phenei_gym.envs.descent6dof import Descent6DOF, Descent6DOFConfig
     base = dict(initial_downrange=-173550.0, nav_cant_deg=60.0)
     truth = Descent6DOF(Descent6DOFConfig(navigation=False, **base)).run()
@@ -335,7 +344,27 @@ def test_zero_noise_navigation_tracks_truth():
     # The handover error is still drawn (the filter starts off truth), so this
     # is not bit-exact -- but the two must land in the same neighbourhood.
     assert abs(clean.touchdown()["miss_m"] - truth.touchdown()["miss_m"]) < 120.0
-    assert clean.nav_error[-1, 1] < truth.touchdown()["miss_m"] + 100.0
+    assert clean.nav_error[-1, 1] < 30.0
+
+
+def test_noise_scale_is_clamped_at_the_floor():
+    from phenei_gym.envs.descent6dof import (
+        NAV_NOISE_FLOOR, Descent6DOF, Descent6DOFConfig)
+    sim = Descent6DOF(Descent6DOFConfig(navigation=True, nav_noise_scale=0.0))
+    assert sim.nav_noise_scale_effective == NAV_NOISE_FLOOR
+    assert sim.suite.trn.sigma > 0.0
+    assert sim.suite.imu.arw > 0.0
+
+
+def test_gate_still_rejects_a_real_outlier_at_the_noise_floor():
+    """The clamp must not disable outlier rejection."""
+    from phenei_gym.envs.descent6dof import Descent6DOF, Descent6DOFConfig
+    sim = Descent6DOF(Descent6DOFConfig(navigation=True, nav_noise_scale=0.0))
+    f = MEKF(MEKFConfig.from_imu(sim.suite.imu),
+             NavState(pos=np.array([0.0, 0.0, 5000.0])))
+    assert f.update_trn(np.array([0.0, 0.0]), sim.suite.trn.sigma)
+    assert not f.update_trn(np.array([50000.0, 0.0]), sim.suite.trn.sigma)
+    assert f.rejected["trn"] == 1
 
 
 def test_noise_scale_actually_scales_the_sensors():

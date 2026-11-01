@@ -30,6 +30,10 @@ from phenei_gym.guidance.attitude import AttitudeController, quat_pointing
 from phenei_gym.params import PARAMS
 
 
+#: Smallest usable sensor-noise multiplier. See Descent6DOF._build_nav().
+NAV_NOISE_FLOOR = 0.01
+
+
 @dataclass
 class Descent6DOFConfig:
     thrust_max: float = 6000.0
@@ -87,7 +91,8 @@ class Descent6DOFConfig:
     navigation: bool = False
     nav_config: str = "1"                    # sensor suite: "1" or "2"
     nav_cant_deg: float = 0.0                # boresight cant aft (TR-SIM-14)
-    nav_noise_scale: float = 1.0             # multiplier on ALL sensor noise
+    nav_noise_scale: float = 1.0             # multiplier on ALL sensor noise;
+                                             # clamped at NAV_NOISE_FLOOR
     nav_seed: int = 0
     nav_rate: float = 200.0                  # Hz, filter propagation rate
     nav_terrain: bool = False                # cast altimeter beams against
@@ -175,7 +180,16 @@ class Descent6DOF:
         self._nav_rng = np.random.default_rng(cfg.nav_seed)
         suite = SensorSuite.baseline(self._nav_rng, config=cfg.nav_config,
                                      cant_deg=cfg.nav_cant_deg)
-        k = cfg.nav_noise_scale
+        # A sensor with ZERO noise is not the limiting case of a real one, it
+        # is an invalid configuration: with R = 0 the covariance collapses to
+        # zero on every accepted update, so the chi-square gate rejects the
+        # next measurement however good it is, and the filter goes blind while
+        # reporting near-perfect confidence. Clamping the dial is the honest
+        # fix -- k = 0 therefore means "at the floor", not "perfect", and the
+        # floor (k = 0.01) is already two orders better than any real sensor,
+        # so it does not distort any k >= 0.5 result.
+        k = max(cfg.nav_noise_scale, NAV_NOISE_FLOOR)
+        self.nav_noise_scale_effective = k
         if k != 1.0:
             # Scale the noise DENSITIES and the biases together, so the sweep
             # moves one dial that means "this sensor suite is k times worse"
