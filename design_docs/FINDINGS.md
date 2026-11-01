@@ -173,7 +173,12 @@ The slope is **1595 m of CEP per 1 % of thrust tolerance** — measured at 1607,
 1587, 1579, 1588 and 1615 across a 20× range, so it is linear to about 1 %.
 
 **Meeting the 50 m requirement this way needs 0.03 % thrust tolerance (0.01 %
-at R95) against the 1–3 % a real pressure-fed engine delivers** (`SIM-MC21`).
+at R95)** (`SIM-MC21`). Whether that is out of reach depends on a number I do
+not have: **I have been comparing it against "1–3 % for a real pressure-fed
+engine", and that figure is my own guess with no source** (`SIM-P19`) — not a
+datasheet, not the MCR, not anything propulsion has said. State the *requirement*
+on the engine and ask for the acceptance tolerance; do not tell propulsion what
+their engine does.
 That is the decisive number: it is not that the engines need to be better, it
 is that no engine is this good, so the guidance law has to absorb the
 dispersion instead of integrating it.
@@ -214,7 +219,7 @@ results, and use several hundred cases before comparing close configurations.
 | Lever | Verdict | Evidence |
 |---|---|---|
 | Better sensors | **Helps, but cannot close it** | Even a *perfect* suite leaves a 168 m mean miss against a 50 m requirement. Degrading it 5× roughly doubles the miss (168 → 441 m) and drops the all-five rate 30 % → 0 % (`SIM-NV10`, 10 seeds/level) |
-| Tighter engine tolerance | **Infeasible** | CEP = 1600 m × (thrust tolerance %), so 50 m needs **0.03 %** against the 1–3 % real engines deliver (`SIM-MC19`) |
+| Tighter engine tolerance | **Infeasible unless propulsion can show 0.03 %** | CEP = 1600 m × (thrust tolerance %), so 50 m needs **0.03 %** 1-σ delivered-thrust reproducibility. The comparison figure for a real engine is unsourced (`SIM-P19`) deliver (`SIM-MC19`) |
 | Tighter injection accuracy | **No effect** | Scaling injection dispersion 0 → full moves CEP less than the sampling uncertainty (`SIM-MC17`) |
 | Closed-loop position guidance | **The only lever left** | By elimination; `TR-SIM-11` |
 

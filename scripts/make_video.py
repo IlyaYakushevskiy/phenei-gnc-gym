@@ -204,7 +204,13 @@ def _deliverable_blueprint():
                 name="Descent + Monte Carlo fan", origin="/",
                 contents=["world/**", "marker/**", "vehicle/**", "chase_cam/**"]),
             rrb.Vertical(
-                rrb.Spatial2DView(name="Chase camera", origin="chase_cam"),
+                # See rerun6dof._blueprint: a 2D view on a pinhole shows only
+                # what is logged beneath that pinhole, so the chase pane is a
+                # 3D view centred on a translation-only follow anchor, with
+                # contents limited to the vehicle so auto-fit does not zoom
+                # back out to the whole 175 km trajectory.
+                rrb.Spatial3DView(name="Vehicle close-up", origin="chase_anchor",
+                                  contents=["vehicle/**", "chase_anchor/**"]),
                 rrb.TimeSeriesView(
                     name="Navigation error vs the filter's own sigma", origin="/",
                     contents=["nav/pos_error_m", "nav/pos_sigma_m",

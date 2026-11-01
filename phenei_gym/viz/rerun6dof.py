@@ -66,7 +66,17 @@ def _blueprint():
                 name="Descent overview", origin="/",
                 contents=["world/**", "marker/**", "chase_cam/**", "vehicle/**"]),
             rrb.Vertical(
-                rrb.Spatial2DView(name="Chase camera", origin="chase_cam"),
+                # Origin "chase_anchor" (translation only, no rotation) makes
+                # this view ride with the vehicle while keeping world
+                # orientation, so attitude changes are visible as the body
+                # rotating rather than as the world swinging around it.
+                #
+                # Contents are deliberately ONLY the vehicle subtree. A 3D view
+                # auto-fits its bounds to its contents, so including the world
+                # would fit a 175 km trajectory and shrink the vehicle back to
+                # a pixel -- the exact problem this pane exists to solve.
+                rrb.Spatial3DView(name="Vehicle close-up", origin="chase_anchor",
+                                  contents=["vehicle/**", "chase_anchor/**"]),
                 rrb.TimeSeriesView(name="Flight state",
                                    origin="/",
                                    contents=["telemetry/altitude_m",
@@ -275,6 +285,13 @@ def log_descent6dof(
         rr.log("chase_cam", rr.Pinhole(
             resolution=[1280, 720], focal_length=620.0,
             camera_xyz=rr.ViewCoordinates.RDF))
+        # Follow anchor for the close-up view: the vehicle's POSITION with no
+        # rotation. The camera above draws a clickable frustum in the overview
+        # (select it and press the camera button to look through it); this
+        # anchor is what the close-up pane is actually centred on, because a
+        # 2D view on a pinhole can only show entities logged beneath that
+        # pinhole, and the world is a sibling of it, not a child.
+        rr.log("chase_anchor", rr.Transform3D(translation=s[I_POS]))
 
         u = thr[i]
         # main-engine plumes: length and width follow that engine's throttle
