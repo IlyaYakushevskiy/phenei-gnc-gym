@@ -313,9 +313,36 @@ measure-zero event at random initialisation. Behaviour-cloning the classical
 guidance reaches 31.7 %, and PPO fine-tuning on top reaches **76.1 %** soft
 landings at 3.41 m/s mean impact.
 
-It does **not** beat the classical guidance, which lands at 11.6 m and
-0.99 m/s meeting all five touchdown criteria. The learned policy's mean miss
-is ~95 m.
+**Compared fairly, the learned policy beats the classical law it cloned.**
+Measured in the *same* environment:
+
+| | miss (mean) | soft | all five criteria |
+|---|---|---|---|
+| classical expert | 122.9 m | 28.2 % | 0.15 % |
+| BC + PPO policy | ~106 m | 70.6 % | 1–3 % |
+
+I previously reported that RL "does not beat the classical guidance, which
+lands at 11.6 m". That was an **invalid comparison**: 11.6 m is the classical
+law flying the full descent from 60 km with a solved ignition point, while the
+RL task is a much harder terminal problem (400 m altitude, 250 m lateral
+offset, 45 s). Two different problems.
+
+**But neither one meets the requirement here, and that is a task-specification
+limit** (`TR-SIM-25`, `SIM-RL17`–`RL19`). In the RL task's initial conditions
+even the hand-tuned classical law gets only **18 % of landings inside 50 m**
+and 0.15 % through all five criteria. The ceiling is too low for the question
+"can a learned policy meet the landing requirement" to be answerable here.
+
+That also explains the observation that defeated reward tuning: the miss stayed
+at 106–107 m when the horizontal shaping weight was raised 7.5× (`SIM-RL16`),
+because the policy was already at the task's ceiling and better than its own
+teacher.
+
+**The methodological lesson, which is the real deliverable of Phase 3:** an RL
+environment needs a *measured reference policy* before any learned result from
+it is interpretable. The expert existed from early on as a cloning target and
+a unit-test fixture; running it end-to-end as a benchmark takes one run and
+would have reframed the whole phase.
 
 Two caveats that matter before anyone quotes the 76 % figure:
 
