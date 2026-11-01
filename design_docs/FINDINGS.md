@@ -185,6 +185,32 @@ produced `inject-scale 0.05` at 2492 m against `0.00` at 3251 m, which is
 sampling noise, not a real ordering. Treat these as kilometres-not-metres
 results, and use several hundred cases before comparing close configurations.
 
+### Which lever closes the requirement? Three of four are eliminated
+
+**`TR-SIM-24`** — the campaign was run to answer exactly this.
+
+| Lever | Verdict | Evidence |
+|---|---|---|
+| Better sensors | **No effect** | Miss shows no trend with sensor noise: 39/239/119/310/88 m from k=0 to k=5. A 5× degraded suite landed *closer* than a near-perfect one (`SIM-NV08`) |
+| Tighter engine tolerance | **Infeasible** | CEP = 1600 m × (thrust tolerance %), so 50 m needs **0.03 %** against the 1–3 % real engines deliver (`SIM-MC19`) |
+| Tighter injection accuracy | **No effect** | Scaling injection dispersion 0 → full moves CEP less than the sampling uncertainty (`SIM-MC17`) |
+| Closed-loop position guidance | **The only lever left** | By elimination; `TR-SIM-11` |
+
+The engine tolerance curve is strikingly linear — 1605, 1588 and 1626 m per
+percent at the three measured points. That matters because it closes off the
+obvious engineering response: engine dispersion *is* correctly identified as
+the dominant error source, and tightening it still cannot work.
+
+Note the slope is linear in *tolerance*, not in burn time or thrust level, so
+it is a property of the guidance law's open-loop structure rather than of the
+engine. A law with position feedback would make the same dispersion
+correctable instead of integrated.
+
+**The propellant failure has the same single cause.** 12–17 of 48 cases ran
+the tanks dry at *every* injection scale including zero, mean usage 376–378 kg
+of 380 kg loaded (`SIM-MC18`). Two independent requirement failures, one
+cause.
+
 ---
 
 ## 4. Hazard avoidance is infeasible where the ConOps puts it
