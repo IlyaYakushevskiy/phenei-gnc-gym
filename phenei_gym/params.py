@@ -49,9 +49,15 @@ class Param:
     def unreviewed(self) -> bool:
         return self.status in UNREVIEWED
 
+    #: Trailing editorial annotations the CSV carries for human readers, e.g.
+    #: ``10 (1 sigma)`` or ``500 (TBC)``. They document the number; they are
+    #: not part of it. Stripped before parsing rather than removed from the
+    #: CSV, because losing "1 sigma" from a noise figure loses its meaning.
+    _ANNOTATION = re.compile(r"\s*\([^()]*\)\s*$")
+
     def as_float(self) -> float:
         try:
-            return float(self.raw.replace(",", ""))
+            return float(self._ANNOTATION.sub("", self.raw).replace(",", ""))
         except ValueError as exc:
             raise ParamError(
                 f"{self.id} ({self.name!r}) is not a scalar: {self.raw!r} [{self.unit}]. "

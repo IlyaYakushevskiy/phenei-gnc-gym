@@ -1,0 +1,28 @@
+
+=== Navigation error, Config 2, boresight cant 45 deg ===
+trajectory 223 s, 44531 filter steps at 5 ms
+
+  measurement updates accepted
+    star          583  (  1.3% of steps)
+    trn             0  (  0.0% of steps)
+    DLEM30          0  (  0.0% of steps)
+    DLEM17          0  (  0.0% of steps)
+    RADAR           0  (  0.0% of steps)
+    velocity      814  (  1.8% of steps)
+
+  navigation error vs the filter's own 1-sigma
+         altitude band |  pos err  pos sig |  vel err  vel sig |  att err  att sig
+            60-10.0 km |    158.4    636.5 |     4.28     8.70 |    0.004    0.005
+             10-3.0 km |    365.1   1168.7 |     4.50     8.81 |    0.003    0.005
+              3-0.5 km |    247.4    380.6 |     0.22     0.38 |    0.005    0.008
+              500-50 m |    240.5    371.1 |     0.09     0.17 |    0.011    0.014
+                50-0 m |    237.5    370.8 |     0.15     0.16 |    0.014    0.015
+
+  AT TOUCHDOWN
+    position error     240.6 m   (filter says 348.2)
+    velocity error      0.00 m/s (filter says 0.01)
+    attitude error     0.011 deg (filter says 0.036)
+    gyro bias est   [0.32215524 0.11943138 0.34036606] deg/h
+    gyro bias true  [ 0.31095613 -0.06987318  0.64701381] deg/h
+
+  (truth touchdown: -0.99 m/s vertical, 0.03 m/s horizontal, 0.14 deg tilt)
