@@ -47,6 +47,7 @@ def main() -> int:
     ap.add_argument("--envs", type=int, default=16384)
     ap.add_argument("--bc-iters", type=int, default=400)
     ap.add_argument("--ppo-iters", type=int, default=1500)
+    ap.add_argument("--warmup", type=int, default=60)
     ap.add_argument("--out", default="studies/bc")
     a = ap.parse_args()
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
@@ -67,7 +68,7 @@ def main() -> int:
             pred = pol.pi(obs)
             loss = F.mse_loss(pred, tgt)
             opt.zero_grad(set_to_none=True); loss.backward(); opt.step()
-            losses.append(float(loss))
+            losses.append(float(loss.detach()))
             # roll forward on a MIX of expert and policy actions so the policy
             # sees the states it will actually visit, not just the expert's
             with torch.no_grad():
@@ -85,9 +86,36 @@ def main() -> int:
     print(f"  AFTER BC: land {tot['landed']} soft {100*tot['soft']/L:.1f}% good {tot['good']} "
           f"div {tot['diverged']} | miss {mi:.1f} vup {vu:.2f} vh {vh:.2f}", flush=True)
 
+    # ---- phase 1b: shrink exploration, warm up the critic
+    # BC trains only the policy mean. Two things then wreck it:
+    #   * the critic is still random, so the first advantages are noise and
+    #     PPO pushes the cloned policy straight off its manifold;
+    #   * log_std = exp(-0.7) = 0.50 is huge next to the precision a touchdown
+    #     needs, so sampling noise drowns the cloned mean.
+    # Measured without this: soft landings went 43% -> 65% -> 24% -> 0% and
+    # horizontal velocity blew up to 48 m/s within 100 iterations.
+    with torch.no_grad():
+        pol.log_std.fill_(-1.9)          # std ~0.15
+    algo = PPO(pol, PPOConfig(rollout=32, lr=3e-5), task.device)
+    print("=== critic warm-up (policy frozen) ===", flush=True)
+    for p_ in pol.pi.parameters():
+        p_.requires_grad_(False)
+    pol.log_std.requires_grad_(False)
+    for it in range(1, a.warmup + 1):
+        obs, batch, _ = algo.collect(task, obs)
+        O, A, LP, V, adv, ret = (x.flatten(0, 1) for x in batch)
+        for _ in range(4):
+            idx = torch.randperm(O.shape[0], device=task.device)[:O.shape[0] // 4]
+            vloss = (pol.vf(O[idx]).squeeze(-1) - ret[idx]).pow(2).mean()
+            algo.opt.zero_grad(set_to_none=True); vloss.backward(); algo.opt.step()
+        if it % 20 == 0:
+            print(f"  warmup {it:3d} | value mse {float(vloss):.3f}", flush=True)
+    for p_ in pol.pi.parameters():
+        p_.requires_grad_(True)
+    pol.log_std.requires_grad_(True)
+
     # ---- phase 2: PPO fine-tune
     print("=== PPO fine-tune ===", flush=True)
-    algo = PPO(pol, PPOConfig(rollout=32, lr=1e-4), task.device)
     fh = (out / "progress.csv").open("w", newline=""); wr = csv.writer(fh)
     wr.writerow(["iter", "minutes", "land_rate", "good_rate", "soft_rate", "miss", "vup", "vh"])
     obs = task.observe(); best = -1.0
