@@ -34,7 +34,7 @@ each other.
 | 0–1 param loader, 3-DOF dynamics, reference descent, Rerun | done; `validate_mcr.py` 15/15 |
 | 2 6-DOF hierarchical stack | done; lands meeting all five touchdown criteria |
 | 2.5 presentable visuals (terrain, nozzles, plumes) | done except the `closeup/` entity |
-| 3 RL | done to a defensible result: BC+PPO 76.1 % soft, does **not** beat classical |
+| 3 RL | done to a defensible result: BC+PPO peaks at 85.2 % soft then collapses (`SIM-RL20`); beats its own expert in-env but not the touchdown requirement |
 | 4 sensors + MEKF, closed-loop navigation | done |
 | 5 Monte Carlo campaign | done; produced the decisive negative result (`TR-SIM-23`) |
 | 6 engineering studies | engine-tolerance + sensor-noise curves done; thruster-count study not started |

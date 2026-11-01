@@ -127,7 +127,7 @@ def main() -> int:
     print(f"=== PPO fine-tune (anchor coef {a.anchor}) ===", flush=True)
     fh = (out / "progress.csv").open("w", newline=""); wr = csv.writer(fh)
     wr.writerow(["iter", "minutes", "land_rate", "good_rate", "soft_rate", "miss", "vup", "vh"])
-    obs = task.observe(); best = -1.0
+    obs = task.observe(); best = (-1.0, -1.0)
     for it in range(1, a.ppo_iters + 1):
         obs, batch, st = algo.collect(task, obs)
         algo.update(batch, anchor=anchor, anchor_coef=a.anchor)
@@ -141,12 +141,25 @@ def main() -> int:
             print(f"  ppo {it:4d} | {(time.time()-t0)/60:6.1f} min | land {tot['landed']:6d} "
                   f"soft {100*tot['soft']/L:5.1f}% good {100*g:5.2f}% div {tot['diverged']:5d} | "
                   f"miss {mi:7.1f} vup {vu:5.2f} vh {vh:5.2f}", flush=True)
-            if g > best:
-                best = g
-                torch.save({"policy": pol.state_dict(), "good_rate": g, "iter": it},
-                           out / "best.pt")
+            # Select on the SOFT rate, with the all-five rate only as a tiebreak.
+            # Selecting on good_rate alone (what this did originally) selects
+            # noise: SIM-RL15 shows it is under 3% and usually exactly 0%, so
+            # over ~6400 landings its sampling noise is its whole signal. In
+            # studies/bc_v3 that argmax chose PPO iteration 1 and threw away the
+            # 85.2%-soft policy from iteration 375. See SIM-RL21, TR-SIM-26.
+            soft = tot["soft"] / L
+            if (soft, g) > best:
+                best = (soft, g)
+                torch.save({"policy": pol.state_dict(), "soft_rate": soft,
+                            "good_rate": g, "iter": it}, out / "best.pt")
+            # Periodic checkpoints regardless of any metric, because BC+PPO on
+            # this task collapses on a long horizon (SIM-RL20) and the collapse
+            # has to be walkable back to an earlier point.
+            if it % 100 == 0:
+                torch.save({"policy": pol.state_dict(), "soft_rate": soft,
+                            "good_rate": g, "iter": it}, out / f"it{it:05d}.pt")
     fh.close()
-    print(f"done. best good_rate {best:.4f}")
+    print(f"done. best soft_rate {best[0]:.4f} (good_rate {best[1]:.4f})")
     return 0
 
 

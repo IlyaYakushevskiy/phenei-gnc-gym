@@ -359,16 +359,24 @@ descent**, and none of §1–7 depends on RL working.
 Where it stands: PPO from scratch plateaus at 0.1 % soft landings after 9.7×10⁹
 environment steps — an exploration failure, since a successful touchdown is a
 measure-zero event at random initialisation. Behaviour-cloning the classical
-guidance reaches 31.7 %, and PPO fine-tuning on top reaches **76.1 %** soft
-landings at 3.41 m/s mean impact.
+guidance reaches 31.7–57.0 %, and PPO fine-tuning on top peaks at **85.2 %**
+soft landings at 3.8 m/s mean impact — then collapses to 0 % if left running
+(see "the collapse is not fixed" below).
 
 **Compared fairly, the learned policy beats the classical law it cloned.**
 Measured in the *same* environment:
 
 | | miss (mean) | soft | all five criteria |
 |---|---|---|---|
-| classical expert | 122.9 m | 28.2 % | 0.15 % |
-| BC + PPO policy | ~106 m | 70.6 % | 1–3 % |
+| classical expert | 122.9 m | 28.2 % | **0.15 %** |
+| BC + PPO policy, at its peak | 100.7 m | 83.8 % | 0.01 % |
+
+Note the last column. The policy wins on miss and on the soft gate and **loses
+on the only criterion that is the actual requirement** — and by iteration 400
+that column is identically zero while the soft rate is at its maximum
+(`SIM-RL15`). The two metrics are anti-correlated over training, which is a
+reward-specification fault: the policy is being paid in the 4.0/3.0 m/s soft
+gate and spends the 2.0/0.5 m/s requirement to buy it.
 
 I previously reported that RL "does not beat the classical guidance, which
 lands at 11.6 m". That was an **invalid comparison**: 11.6 m is the classical
@@ -393,9 +401,41 @@ it is interpretable. The expert existed from early on as a cloning target and
 a unit-test fixture; running it end-to-end as a benchmark takes one run and
 would have reframed the whole phase.
 
-Two caveats that matter before anyone quotes the 76 % figure:
+### The BC→PPO collapse is delayed, not fixed
 
-- **Run-to-run variance is ~25 points** (`SIM-RL13`). Two behaviour-cloning
+**`SIM-RL20`.** Three runs, identical dynamics and task:
+
+| run | handoff treatment | peak soft | collapses at |
+|---|---|---|---|
+| v1 | untrained critic, exploration std 0.50, lr 3e-4 | 43.5 % (iter 1) | iteration 75 → 0 % by 150 |
+| v2 | critic warm-up, std 0.135, lr 3e-5 | 76.1 % | not seen — run stopped at 150 |
+| v3 | as v2, plus a BC trust-region anchor (0.05) | 85.2 % (iter 375) | iteration ~600 → 0 % by 900 |
+
+By iteration 900 of v3 the policy touches down at **34.5 m/s horizontal** with
+10 399 divergences per batch. So the handoff fixes and the anchor buy roughly
+an order of magnitude in iterations; they do not buy stability. **Any BC+PPO
+run on this task must be early-stopped on a validation metric** rather than
+given a fixed iteration budget.
+
+Which is exactly where I then lost the best policy. The checkpoint selector
+took the argmax of the all-five rate — a metric that is under 3 % everywhere
+and usually exactly 0 %, so over ~6400 landings its sampling noise *is* its
+signal. It selected **PPO iteration 1**, essentially the pre-fine-tuning
+policy, and the 85.2 % policy from iteration 375 was never written to disk
+(`SIM-RL21`, `TR-SIM-26`). Nothing downstream used that checkpoint, so no
+result here is wrong, but recovering it costs a 5.6-hour re-run. Fixed:
+selection is on the soft rate with the all-five rate as a tiebreak, plus
+unconditional checkpoints every 100 iterations.
+
+The general form of that mistake is worth keeping: **a selection metric must
+have signal at the sample size you evaluate it at**, and this failure is silent
+— the run prints `best good_rate 0.0267` and looks like it worked.
+
+Two caveats that matter before anyone quotes the 85 % figure:
+
+- **Run-to-run variance is ~25 points** (`SIM-RL13`), which is larger than the
+  gap between v2's and v3's peaks — so the anchor cannot be claimed to have
+  *raised* the peak, only to have postponed the decay. Two behaviour-cloning
   runs with identical dynamics, expert and loss scored 31.7 % and 57.0 %. The
   cause is the DAgger feedback loop — training rolls forward on a mix of
   expert and policy actions, so a slightly better early policy visits better
