@@ -90,6 +90,8 @@ class Descent6DOFConfig:
     nav_noise_scale: float = 1.0             # multiplier on ALL sensor noise
     nav_seed: int = 0
     nav_rate: float = 200.0                  # Hz, filter propagation rate
+    nav_terrain: bool = False                # cast altimeter beams against
+                                             # real terrain instead of a plane
 
     def __post_init__(self):
         if self.ignition_altitude is None:
@@ -195,6 +197,17 @@ class Descent6DOF:
             if hasattr(suite.velocity, "sigma"):
                 suite.velocity.sigma *= k
         self.suite = suite
+        # Terrain for the altimeter beams to hit. Off by default because the
+        # raycast makes a descent ~3x slower, and for a noise sweep the
+        # variable of interest is the noise, not the ground. When it is off,
+        # closed-loop results are FLAT-SURFACE results and must not be quoted
+        # as including terrain-slope bias -- scripts/run_nav.py --terrain
+        # measures that separately.
+        self._nav_terrain = None
+        if cfg.nav_terrain:
+            from phenei_gym import terrain as _terrain_mod
+            self._nav_terrain = _terrain_mod.generate(
+                np.random.default_rng(cfg.nav_seed))
         mcfg = MEKFConfig.from_imu(suite.imu)
         self._MEKF, self._NavState, self._mcfg = MEKF, NavState, mcfg
 
@@ -218,7 +231,10 @@ class Descent6DOF:
         tr = Truth(t=t, pos=s_true[I_POS].copy(), vel=s_true[I_VEL].copy(),
                    quat=s_true[I_QUAT].copy(), omega=s_true[I_OMEGA].copy(),
                    accel_inertial=accel,
-                   gravity=_grav(s_true[I_POS], self.veh.mu, self.radius))
+                   gravity=_grav(s_true[I_POS], self.veh.mu, self.radius),
+                   terrain_height=(0.0 if self._nav_terrain is None else
+                                   float(self._nav_terrain.height_at(
+                                       s_true[I_POS][0], s_true[I_POS][1]))))
 
         om, ac = suite.imu.sample(tr, dt_nav, rng)
         nav.propagate(om, ac, dt_nav)
@@ -228,7 +244,7 @@ class Descent6DOF:
         if (fix := suite.trn.sample(tr, rng)) is not None:
             nav.update_trn(fix[0], fix[1])
         for alt in suite.altimeters:
-            if (r := alt.sample(tr, rng, None)) is not None:
+            if (r := alt.sample(tr, rng, self._nav_terrain)) is not None:
                 nav.update_altimeter(r, alt.boresight_body, alt.sigma_at(r))
         if (vm := suite.velocity.sample(tr, rng)) is not None:
             nav.update_velocity(vm[0], vm[1],

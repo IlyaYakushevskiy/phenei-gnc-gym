@@ -41,15 +41,7 @@ from phenei_gym.sensors import SensorSuite, Truth  # noqa: E402
 from phenei_gym.viz import rerun_nav as rnav  # noqa: E402
 from phenei_gym.viz.rerun6dof import log_descent6dof  # noqa: E402
 
-# The dispersion table lives with the campaign script; load it by path rather
-# than as `scripts.mc_campaign`, which is not an importable package.
-import importlib.util as _ilu  # noqa: E402
-
-_spec = _ilu.spec_from_file_location(
-    "mc_campaign", Path(__file__).resolve().parent / "mc_campaign.py")
-_mc = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_mc)
-SIGMA, SIGMA_SCALE, truncated_normal = _mc.SIGMA, _mc.SIGMA_SCALE, _mc.truncated_normal
+from phenei_gym.mc import draw as mc_draw  # noqa: E402
 
 RADIUS = PARAMS.value("SIM-E03") * 1e3
 MU = PARAMS.value("SIM-E02")
@@ -76,9 +68,7 @@ def fan_case(args):
     """
     seed, x0, base = args
     rng = np.random.default_rng(10000 + seed)
-    disp = {k: truncated_normal(rng, v) for k, v in SIGMA.items()}
-    disp["thrust_scale"] = 1.0 + truncated_normal(rng, SIGMA_SCALE["thrust_scale"])
-    disp["isp_scale"] = 1.0 + truncated_normal(rng, SIGMA_SCALE["isp_scale"])
+    disp = mc_draw(rng)
     res = Descent6DOF(Descent6DOFConfig(initial_downrange=x0, **base, **disp)).run()
     stride = max(1, len(res.t) // 400)
     return (res.state[::stride, I_POS].copy(),

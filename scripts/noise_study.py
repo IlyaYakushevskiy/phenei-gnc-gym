@@ -33,10 +33,11 @@ LIMITS = {k: PARAMS.value(k) for k in
 
 
 def one(job):
-    scale, seed, x0, base, cant, config = job
+    scale, seed, x0, base, cant, config, terrain = job
     cfg = Descent6DOFConfig(
         initial_downrange=x0, navigation=True, nav_noise_scale=scale,
-        nav_seed=seed, nav_cant_deg=cant, nav_config=config, **base)
+        nav_seed=seed, nav_cant_deg=cant, nav_config=config,
+        nav_terrain=terrain, **base)
     res = Descent6DOF(cfg).run()
     td = res.touchdown()
     nav = res.nav_error
@@ -61,6 +62,8 @@ def main() -> int:
     p.add_argument("--altitude", type=float, default=None)
     p.add_argument("--cant", type=float, default=0.0)
     p.add_argument("--config", default="1", choices=["1", "2"])
+    p.add_argument("--terrain", action="store_true",
+                   help="cast altimeter beams against real terrain (~3x slower)")
     a = p.parse_args()
 
     if a.altitude is None:
@@ -69,11 +72,13 @@ def main() -> int:
     scales = [float(x) for x in a.scales.split(",")]
     x0 = a.x0 * 1e3
 
-    jobs = [(sc, sd, x0, base, a.cant, a.config)
+    jobs = [(sc, sd, x0, base, a.cant, a.config, a.terrain)
             for sc in scales for sd in range(a.seeds)]
     print(f"{len(jobs)} closed-loop descents "
           f"({len(scales)} noise levels x {a.seeds} seeds), "
-          f"cant {a.cant:.0f} deg, Config {a.config}", flush=True)
+          f"cant {a.cant:.0f} deg, Config {a.config}, "
+          f"terrain {'on' if a.terrain else 'off (FLAT -- slope bias not included)'}",
+          flush=True)
 
     t0 = time.time()
     out = []

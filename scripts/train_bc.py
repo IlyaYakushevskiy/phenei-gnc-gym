@@ -111,7 +111,7 @@ def main() -> int:
             vloss = (pol.vf(O[idx]).squeeze(-1) - ret[idx]).pow(2).mean()
             algo.opt.zero_grad(set_to_none=True); vloss.backward(); algo.opt.step()
         if it % 20 == 0:
-            print(f"  warmup {it:3d} | value mse {float(vloss):.3f}", flush=True)
+            print(f"  warmup {it:3d} | value mse {float(vloss.detach()):.3f}", flush=True)
     for p_ in pol.pi.parameters():
         p_.requires_grad_(True)
     pol.log_std.requires_grad_(True)

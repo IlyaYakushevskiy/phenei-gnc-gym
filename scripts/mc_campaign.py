@@ -40,22 +40,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from phenei_gym.envs.descent6dof import Descent6DOF, Descent6DOFConfig  # noqa: E402
+from phenei_gym.mc import SIGMA, SIGMA_SCALE, draw as mc_draw, truncated_normal  # noqa: E402,F401
 from phenei_gym.params import PARAMS  # noqa: E402
-
-# 1-sigma dispersions. Every one is an Assumption (LLM) pending TR-08 and the
-# propulsion team's acceptance tolerances -- documented as SIM-MC* rows.
-SIGMA = {
-    "d_altitude": 500.0,        # m      ignition altitude knowledge/execution
-    "d_v_horizontal": 10.0,     # m/s    injection velocity error, in-plane
-    "d_v_vertical": 5.0,        # m/s
-    "d_crossrange": 1000.0,     # m      out-of-plane injection error
-    "d_v_crossrange": 5.0,      # m/s
-    "d_mass": 10.0,             # kg     propellant-load and dry-mass knowledge
-}
-SIGMA_SCALE = {
-    "thrust_scale": 0.02,       # 2 % engine performance
-    "isp_scale": 0.01,          # 1 % Isp
-}
 
 
 @dataclass
@@ -80,17 +66,6 @@ class CaseResult:
         return all([self.ok_t01, self.ok_t02, self.ok_t03, self.ok_t04, self.ok_t05])
 
 
-def truncated_normal(rng: np.random.Generator, sigma: float, cut: float = 3.0) -> float:
-    """Gaussian truncated at ``cut`` sigma -- no 7-sigma outliers driving the
-    tails of a 200-case campaign."""
-    if sigma == 0.0:
-        return 0.0
-    while True:
-        v = rng.normal(0.0, sigma)
-        if abs(v) <= cut * sigma:
-            return float(v)
-
-
 def solve_nominal_ignition(base: dict, passes: int = 4) -> tuple[float, object]:
     """Iterate the undispersed descent until touchdown lands on the site."""
     def fly(x0: float):
@@ -107,11 +82,7 @@ def solve_nominal_ignition(base: dict, passes: int = 4) -> tuple[float, object]:
 def run_case(args) -> CaseResult:
     seed, x0, base, inject_scale, perf_scale = args
     rng = np.random.default_rng(seed)
-    disp = {k: truncated_normal(rng, v * inject_scale) for k, v in SIGMA.items()}
-    disp["thrust_scale"] = 1.0 + truncated_normal(
-        rng, SIGMA_SCALE["thrust_scale"] * perf_scale)
-    disp["isp_scale"] = 1.0 + truncated_normal(
-        rng, SIGMA_SCALE["isp_scale"] * perf_scale)
+    disp = mc_draw(rng, inject_scale=inject_scale, perf_scale=perf_scale)
 
     cfg = Descent6DOFConfig(initial_downrange=x0, **base, **disp)
     res = Descent6DOF(cfg).run()
