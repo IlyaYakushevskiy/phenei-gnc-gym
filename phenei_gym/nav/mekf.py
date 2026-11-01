@@ -44,6 +44,14 @@ I_DTH, I_DV, I_DP, I_DBG, I_DBA = (slice(0, 3), slice(3, 6), slice(6, 9),
                                    slice(9, 12), slice(12, 15))
 NX = 15
 
+#: Smallest measurement variance the filter will accept. Guards the
+#: zero-noise diagnostic case (``nav_noise_scale = 0``) and any sensor model
+#: that reports an implausibly confident fix.
+R_FLOOR = 1e-9
+
+#: Smallest process-noise density, same rationale.
+Q_FLOOR = 1e-12
+
 
 def skew(v: np.ndarray) -> np.ndarray:
     return np.array([[0.0, -v[2], v[1]],
@@ -152,18 +160,30 @@ class MEKF:
         F[I_DP, I_DV] = np.eye(3)
         Phi = np.eye(NX) + F * dt + 0.5 * (F @ F) * dt * dt
 
-        Q = np.zeros((NX, NX))
-        Q[I_DTH, I_DTH] = np.eye(3) * c.arw ** 2 * dt
-        Q[I_DV, I_DV] = np.eye(3) * c.vrw ** 2 * dt
-        Q[I_DBG, I_DBG] = np.eye(3) * c.rrw_gyro ** 2 * dt
-        Q[I_DBA, I_DBA] = np.eye(3) * c.rrw_accel ** 2 * dt
+        # Floored for the same reason as R: a Q of exactly zero lets P
+        # collapse to singular, after which no measurement can move the state.
+        Q = np.eye(NX) * Q_FLOOR * dt
+        Q[I_DTH, I_DTH] = np.eye(3) * (c.arw ** 2 * dt + Q_FLOOR * dt)
+        Q[I_DV, I_DV] = np.eye(3) * (c.vrw ** 2 * dt + Q_FLOOR * dt)
+        Q[I_DBG, I_DBG] = np.eye(3) * (c.rrw_gyro ** 2 * dt + Q_FLOOR * dt)
+        Q[I_DBA, I_DBA] = np.eye(3) * (c.rrw_accel ** 2 * dt + Q_FLOOR * dt)
         self.P = Phi @ self.P @ Phi.T + Q
         self.P = 0.5 * (self.P + self.P.T)
 
     # ------------------------------------------------------------------
     def _update(self, H: np.ndarray, residual: np.ndarray, R: np.ndarray,
                 tag: str) -> bool:
-        """Joseph-form update with a Mahalanobis gate. True if accepted."""
+        """Joseph-form update with a Mahalanobis gate. True if accepted.
+
+        ``R`` is floored at ``R_FLOOR``. A real sensor always has some noise,
+        and a filter handed R = 0 is degenerate: S = H P H' + R goes singular,
+        every update is rejected, and the filter silently falls back to pure
+        dead reckoning while still reporting a shrinking covariance. That is
+        exactly what a zero-noise diagnostic run did -- it never corrected its
+        initial handover error and burned the tanks dry, which looked like a
+        guidance failure and was not.
+        """
+        R = R + np.eye(len(residual)) * R_FLOOR
         S = H @ self.P @ H.T + R
         try:
             Sinv = np.linalg.inv(S)
