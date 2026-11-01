@@ -417,6 +417,9 @@ class Descent6DOF:
                 quat=s[I_QUAT].copy()))
             n_nav = max(1, int(round(1.0 / (cfg.nav_rate * dt))))
             prev_vel = s[I_VEL].copy()
+            # Kept for diagnostics: accepted/rejected counts per sensor are
+            # the first thing to look at when navigation behaves oddly.
+            self.nav_filter = nav
 
         for k in range(int(cfg.t_max / dt)):
             mass = s[I_MASS]
